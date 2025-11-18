@@ -1,5 +1,24 @@
 import os
 import sys
+from pathlib import Path
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    # Find .env file in project root (parent of parent of this file)
+    config_dir = Path(__file__).parent  # src/core
+    src_dir = config_dir.parent  # src
+    project_root = src_dir.parent  # project root
+    env_file = project_root / '.env'
+
+    if env_file.exists():
+        load_dotenv(env_file)
+        print(f"✅ Loaded environment variables from .env file")
+    else:
+        print(f"⚠️  No .env file found at {env_file}")
+        print(f"   Please copy .env.example to .env and configure it")
+except ImportError:
+    print("⚠️  python-dotenv not installed")
 
 # Configuration
 class Config:
