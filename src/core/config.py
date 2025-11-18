@@ -23,18 +23,16 @@ except ImportError:
 # Configuration
 class Config:
     def __init__(self):
-        # Global/fallback provider settings
+        # Global/fallback provider settings (optional if all model-specific settings are provided)
         self.openai_api_key = os.environ.get("OPENAI_API_KEY")
-        if not self.openai_api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
+        self.openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.azure_api_version = os.environ.get("AZURE_API_VERSION")  # For Azure OpenAI
 
         # Add Anthropic API key for client validation
         self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not self.anthropic_api_key:
             print("Warning: ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
 
-        self.openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        self.azure_api_version = os.environ.get("AZURE_API_VERSION")  # For Azure OpenAI
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8082"))
         self.log_level = os.environ.get("LOG_LEVEL", "INFO")
@@ -65,15 +63,39 @@ class Config:
         self.small_model_api_key = os.environ.get("SMALL_MODEL_API_KEY", self.openai_api_key)
         self.small_model_base_url = os.environ.get("SMALL_MODEL_BASE_URL", self.openai_base_url)
         self.small_model_azure_api_version = os.environ.get("SMALL_MODEL_AZURE_API_VERSION", self.azure_api_version)
+
+        # Validate that we have API keys for all models
+        missing_keys = []
+        if not self.big_model_api_key:
+            missing_keys.append("BIG_MODEL_API_KEY")
+        if not self.middle_model_api_key:
+            missing_keys.append("MIDDLE_MODEL_API_KEY")
+        if not self.small_model_api_key:
+            missing_keys.append("SMALL_MODEL_API_KEY")
+
+        if missing_keys:
+            error_msg = (
+                f"Missing API key configuration. Either set OPENAI_API_KEY as a fallback, "
+                f"or configure all model-specific API keys.\n"
+                f"Missing: {', '.join(missing_keys)}\n"
+                f"Note: OPENAI_API_KEY can be omitted if all three model-specific keys are set:\n"
+                f"  - BIG_MODEL_API_KEY\n"
+                f"  - MIDDLE_MODEL_API_KEY\n"
+                f"  - SMALL_MODEL_API_KEY"
+            )
+            raise ValueError(error_msg)
         
     def validate_api_key(self):
-        """Basic API key validation"""
-        if not self.openai_api_key:
-            return False
-        # Basic format check for OpenAI API keys
-        if not self.openai_api_key.startswith('sk-'):
-            return False
-        return True
+        """Basic API key validation - checks if at least one valid API key is configured"""
+        # Check if any model has a valid API key
+        has_valid_key = False
+
+        for api_key in [self.big_model_api_key, self.middle_model_api_key, self.small_model_api_key]:
+            if api_key and api_key.startswith('sk-'):
+                has_valid_key = True
+                break
+
+        return has_valid_key
         
     def validate_client_api_key(self, client_api_key):
         """Validate client's Anthropic API key"""
