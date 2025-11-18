@@ -105,14 +105,17 @@ class OpenAIClient:
                 del self.active_requests[request_id]
     
     async def create_chat_completion_stream(self, request: Dict[str, Any], request_id: Optional[str] = None) -> AsyncGenerator[str, None]:
-        """Send streaming chat completion to OpenAI API with cancellation support."""
+        """Send streaming chat completion to OpenAI API with cancellation support.
+
+        Note: Since this is used with StreamingResponse, we must ALWAYS yield error events
+        in SSE format instead of raising HTTPException, because the HTTP response has
+        already started by the time this generator is called.
+        """
 
         # Create cancellation token if request_id provided
         if request_id:
             cancel_event = asyncio.Event()
             self.active_requests[request_id] = cancel_event
-
-        streaming_started = False
 
         try:
             # Ensure stream is enabled
@@ -123,14 +126,13 @@ class OpenAIClient:
 
             # Create the streaming completion
             streaming_completion = await self.client.chat.completions.create(**request)
-            streaming_started = True
 
             async for chunk in streaming_completion:
                 # Check for cancellation before yielding each chunk
                 if request_id and request_id in self.active_requests:
                     if self.active_requests[request_id].is_set():
                         logger.info(f"Request {request_id} cancelled by client")
-                        # Yield error event in SSE format instead of raising
+                        # Yield error event in SSE format
                         error_data = {
                             "error": {
                                 "type": "cancelled",
@@ -152,49 +154,38 @@ class OpenAIClient:
             error_msg = self.classify_openai_error(str(e))
             logger.error(f"Authentication error in streaming: {error_msg}")
             logger.error(traceback.format_exc())
-            if streaming_started:
-                # Yield error event in SSE format
-                error_data = {"error": {"type": "authentication_error", "message": error_msg}}
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
-            else:
-                raise HTTPException(status_code=401, detail=error_msg)
+            # Always yield error event in SSE format (response already started)
+            error_data = {"error": {"type": "authentication_error", "message": error_msg}}
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
         except RateLimitError as e:
             error_msg = self.classify_openai_error(str(e))
             logger.error(f"Rate limit error in streaming: {error_msg}")
             logger.error(traceback.format_exc())
-            if streaming_started:
-                error_data = {"error": {"type": "rate_limit_error", "message": error_msg}}
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
-            else:
-                raise HTTPException(status_code=429, detail=error_msg)
+            # Always yield error event in SSE format (response already started)
+            error_data = {"error": {"type": "rate_limit_error", "message": error_msg}}
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
         except BadRequestError as e:
             error_msg = self.classify_openai_error(str(e))
             logger.error(f"Bad request error in streaming: {error_msg}")
             logger.error(traceback.format_exc())
-            if streaming_started:
-                error_data = {"error": {"type": "invalid_request_error", "message": error_msg}}
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
-            else:
-                raise HTTPException(status_code=400, detail=error_msg)
+            # Always yield error event in SSE format (response already started)
+            error_data = {"error": {"type": "invalid_request_error", "message": error_msg}}
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
         except APIError as e:
             error_msg = self.classify_openai_error(str(e))
             status_code = getattr(e, 'status_code', 500)
             logger.error(f"API error in streaming (status {status_code}): {error_msg}")
             logger.error(traceback.format_exc())
-            if streaming_started:
-                error_data = {"error": {"type": "api_error", "message": error_msg}}
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
-            else:
-                raise HTTPException(status_code=status_code, detail=error_msg)
+            # Always yield error event in SSE format (response already started)
+            error_data = {"error": {"type": "api_error", "message": error_msg}}
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
         except Exception as e:
             error_msg = f"Unexpected error: {str(e)}"
             logger.error(f"Unexpected error in streaming: {error_msg}")
             logger.error(traceback.format_exc())
-            if streaming_started:
-                error_data = {"error": {"type": "api_error", "message": error_msg}}
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
-            else:
-                raise HTTPException(status_code=500, detail=error_msg)
+            # Always yield error event in SSE format (response already started)
+            error_data = {"error": {"type": "api_error", "message": error_msg}}
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
 
         finally:
             # Clean up active request tracking
