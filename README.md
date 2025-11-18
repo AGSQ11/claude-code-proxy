@@ -8,11 +8,12 @@ A proxy server that enables **Claude Code** to work with OpenAI-compatible API p
 
 - **Full Claude API Compatibility**: Complete `/v1/messages` endpoint support
 - **Multiple Provider Support**: OpenAI, Azure OpenAI, local models (Ollama), and any OpenAI-compatible API
-- **Smart Model Mapping**: Configure BIG and SMALL models via environment variables
+- **Multi-Provider Architecture**: Use different providers for each model tier (BIG/MIDDLE/SMALL)
+- **Smart Model Mapping**: Configure BIG, MIDDLE, and SMALL models via environment variables
 - **Function Calling**: Complete tool use support with proper conversion
 - **Streaming Responses**: Real-time SSE streaming support
 - **Image Support**: Base64 encoded image input
-- **Custom Headers**: Automatic injection of custom HTTP headers for API requests
+- **Custom Headers**: Automatic injection of custom HTTP headers (global and per-model)
 - **Error Handling**: Comprehensive error handling and logging
 
 ## Quick Start
@@ -77,12 +78,29 @@ The application automatically loads environment variables from a `.env` file in 
 **Model Configuration:**
 
 - `BIG_MODEL` - Model for Claude opus requests (default: `gpt-4o`)
-- `MIDDLE_MODEL` - Model for Claude opus requests (default: `gpt-4o`)
+- `MIDDLE_MODEL` - Model for Claude sonnet requests (default: `gpt-4o`)
 - `SMALL_MODEL` - Model for Claude haiku requests (default: `gpt-4o-mini`)
 
 **API Configuration:**
 
 - `OPENAI_BASE_URL` - API base URL (default: `https://api.openai.com/v1`)
+- `AZURE_API_VERSION` - Azure OpenAI API version (optional)
+
+**Per-Model Provider Configuration (Advanced):**
+
+You can configure different providers for each model tier. If not specified, falls back to global settings.
+
+- `BIG_MODEL_API_KEY` - API key for BIG model (default: uses `OPENAI_API_KEY`)
+- `BIG_MODEL_BASE_URL` - Base URL for BIG model (default: uses `OPENAI_BASE_URL`)
+- `BIG_MODEL_AZURE_API_VERSION` - Azure API version for BIG model (default: uses `AZURE_API_VERSION`)
+
+- `MIDDLE_MODEL_API_KEY` - API key for MIDDLE model (default: uses `OPENAI_API_KEY`)
+- `MIDDLE_MODEL_BASE_URL` - Base URL for MIDDLE model (default: uses `OPENAI_BASE_URL`)
+- `MIDDLE_MODEL_AZURE_API_VERSION` - Azure API version for MIDDLE model (default: uses `AZURE_API_VERSION`)
+
+- `SMALL_MODEL_API_KEY` - API key for SMALL model (default: uses `OPENAI_API_KEY`)
+- `SMALL_MODEL_BASE_URL` - Base URL for SMALL model (default: uses `OPENAI_BASE_URL`)
+- `SMALL_MODEL_AZURE_API_VERSION` - Azure API version for SMALL model (default: uses `AZURE_API_VERSION`)
 
 **Server Settings:**
 
@@ -97,7 +115,14 @@ The application automatically loads environment variables from a `.env` file in 
 
 **Custom Headers:**
 
-- `CUSTOM_HEADER_*` - Custom headers for API requests (e.g., `CUSTOM_HEADER_ACCEPT`, `CUSTOM_HEADER_AUTHORIZATION`)
+- `CUSTOM_HEADER_*` - Global custom headers for all API requests
+  - Example: `CUSTOM_HEADER_X_API_KEY="your-key"`
+  - Example: `CUSTOM_HEADER_AUTHORIZATION="Bearer token"`
+
+- `CUSTOM_HEADER_{MODEL_TIER}_MODEL_*` - Per-model custom headers
+  - Example: `CUSTOM_HEADER_BIG_MODEL_X_API_KEY="big-model-key"`
+  - Example: `CUSTOM_HEADER_SMALL_MODEL_HOST="example.com"`
+  - These override global headers for the specific model tier
   - Uncomment in `.env` file to enable custom headers
 
 ### Custom Headers Configuration
@@ -199,6 +224,69 @@ SMALL_MODEL="llama3.1:8b"
 #### Other Providers
 
 Any OpenAI-compatible API can be used by setting the appropriate `OPENAI_BASE_URL`.
+
+### Multi-Provider Configuration Examples
+
+You can mix and match different providers for each model tier:
+
+#### Example 1: OpenAI + Local Ollama
+
+Use OpenAI for expensive models and local Ollama for cheaper requests:
+
+```bash
+# Global settings (used by BIG and MIDDLE)
+OPENAI_API_KEY="sk-your-openai-key"
+OPENAI_BASE_URL="https://api.openai.com/v1"
+BIG_MODEL="gpt-4o"
+MIDDLE_MODEL="gpt-4o"
+
+# SMALL model uses local Ollama
+SMALL_MODEL="llama3.1:8b"
+SMALL_MODEL_API_KEY="dummy-key"
+SMALL_MODEL_BASE_URL="http://localhost:11434/v1"
+```
+
+#### Example 2: Azure + OpenAI + Ollama
+
+Different provider for each tier:
+
+```bash
+# BIG model uses Azure OpenAI
+BIG_MODEL="gpt-4"
+BIG_MODEL_API_KEY="your-azure-key"
+BIG_MODEL_BASE_URL="https://your-resource.openai.azure.com/openai/deployments/gpt-4"
+BIG_MODEL_AZURE_API_VERSION="2024-03-01-preview"
+
+# MIDDLE model uses standard OpenAI
+MIDDLE_MODEL="gpt-4o"
+MIDDLE_MODEL_API_KEY="sk-your-openai-key"
+MIDDLE_MODEL_BASE_URL="https://api.openai.com/v1"
+
+# SMALL model uses local Ollama
+SMALL_MODEL="llama3.1:8b"
+SMALL_MODEL_API_KEY="dummy-key"
+SMALL_MODEL_BASE_URL="http://localhost:11434/v1"
+```
+
+#### Example 3: Different API Keys Per Tier
+
+Use different API accounts for cost management:
+
+```bash
+# Global settings as fallback
+OPENAI_API_KEY="sk-fallback-key"
+OPENAI_BASE_URL="https://api.openai.com/v1"
+
+# Each tier uses different API key
+BIG_MODEL="gpt-4o"
+BIG_MODEL_API_KEY="sk-expensive-tier-key"
+
+MIDDLE_MODEL="gpt-4o"
+MIDDLE_MODEL_API_KEY="sk-medium-tier-key"
+
+SMALL_MODEL="gpt-4o-mini"
+SMALL_MODEL_API_KEY="sk-cheap-tier-key"
+```
 
 ## Usage Examples
 
