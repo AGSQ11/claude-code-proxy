@@ -6,7 +6,7 @@ from typing import Optional
 
 from src.core.config import config
 from src.core.logging import logger
-from src.core.client import OpenAIClient
+from src.core.client_manager import client_manager
 from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
 from src.conversion.request_converter import convert_claude_to_openai
 from src.conversion.response_converter import (
@@ -16,17 +16,6 @@ from src.conversion.response_converter import (
 from src.core.model_manager import model_manager
 
 router = APIRouter()
-
-# Get custom headers from config
-custom_headers = config.get_custom_headers()
-
-openai_client = OpenAIClient(
-    config.openai_api_key,
-    config.openai_base_url,
-    config.request_timeout,
-    api_version=config.azure_api_version,
-    custom_headers=custom_headers,
-)
 
 async def validate_api_key(x_api_key: Optional[str] = Header(None), authorization: Optional[str] = Header(None)):
     """Validate the client's API key from either x-api-key header or Authorization header."""
@@ -62,6 +51,9 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
 
         # Convert Claude request to OpenAI format
         openai_request = convert_claude_to_openai(request, model_manager)
+
+        # Get the appropriate client for the model
+        openai_client = client_manager.get_client_for_model(openai_request['model'])
 
         # Check if client disconnected before processing
         if await http_request.is_disconnected():
@@ -118,6 +110,8 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
 
         logger.error(f"Unexpected error processing request: {e}")
         logger.error(traceback.format_exc())
+        # Get client for error classification (use small model client as fallback)
+        openai_client = client_manager.clients['small']
         error_message = openai_client.classify_openai_error(str(e))
         raise HTTPException(status_code=500, detail=error_message)
 
@@ -174,10 +168,11 @@ async def health_check():
 
 @router.get("/test-connection")
 async def test_connection():
-    """Test API connectivity to OpenAI"""
+    """Test API connectivity to all configured providers"""
     try:
-        # Simple test request to verify API connectivity
-        test_response = await openai_client.create_chat_completion(
+        # Test the small model client
+        small_client = client_manager.clients['small']
+        test_response = await small_client.create_chat_completion(
             {
                 "model": config.small_model,
                 "messages": [{"role": "user", "content": "Hello"}],
