@@ -128,6 +128,21 @@ class GoogleGenAIClient:
             config = self._build_config(request, system_instruction)
             logger.info(f"📋 Converted {len(contents)} contents, system_instruction={'present' if system_instruction else 'none'}")
 
+            # Debug: Log content structure to identify invalid arguments
+            for idx, content in enumerate(contents):
+                parts_info = []
+                if hasattr(content, 'parts'):
+                    for part in content.parts:
+                        if hasattr(part, 'text'):
+                            parts_info.append(f"text({len(getattr(part, 'text', ''))}chars)")
+                        elif hasattr(part, 'function_call'):
+                            parts_info.append(f"function_call({getattr(part.function_call, 'name', 'unknown')})")
+                        elif hasattr(part, 'function_response'):
+                            parts_info.append(f"function_response({getattr(part.function_response, 'name', 'unknown')})")
+                        else:
+                            parts_info.append(f"unknown_part({type(part).__name__})")
+                logger.info(f"  Content[{idx}]: role={getattr(content, 'role', '?')}, parts=[{', '.join(parts_info)}]")
+
             # Stream from Google API (blocking, so run in thread pool)
             def _generate_stream():
                 logger.info(f"🔌 Calling Google API generate_content_stream for {model}...")
@@ -206,6 +221,8 @@ class GoogleGenAIClient:
                     for tool_call in msg["tool_calls"]:
                         if tool_call.get("type") == "function":
                             func = tool_call.get("function", {})
+                            func_name = func.get("name", "")
+
                             # Parse arguments JSON string to dict
                             args_str = func.get("arguments", "{}")
                             try:
@@ -215,11 +232,17 @@ class GoogleGenAIClient:
                                 args = {}
 
                             # Create FunctionCall part
-                            parts.append(types.Part.from_function_call(
-                                name=func.get("name", ""),
-                                args=args
-                            ))
-                            logger.info(f"✅ Converted assistant tool_call '{func.get('name')}' to Google function_call")
+                            try:
+                                fc_part = types.Part.from_function_call(
+                                    name=func_name,
+                                    args=args
+                                )
+                                parts.append(fc_part)
+                                logger.info(f"✅ Converted assistant tool_call '{func_name}' to Google function_call")
+                            except Exception as e:
+                                logger.error(f"❌ Failed to create function_call part for '{func_name}': {e}")
+                                logger.error(f"   args type: {type(args)}, args: {args}")
+                                raise
 
                 if parts:
                     contents.append(types.Content(role="model", parts=parts))
@@ -236,13 +259,19 @@ class GoogleGenAIClient:
                 func_name = msg.get("name", "unknown_function")
 
                 # Create FunctionResponse part
-                parts = [types.Part.from_function_response(
-                    name=func_name,
-                    response={"result": result_content}
-                )]
-
-                contents.append(types.Content(role="user", parts=parts))
-                logger.info(f"✅ Converted tool result for '{func_name}' to Google function_response")
+                try:
+                    fr_part = types.Part.from_function_response(
+                        name=func_name,
+                        response={"result": result_content}
+                    )
+                    parts = [fr_part]
+                    contents.append(types.Content(role="user", parts=parts))
+                    logger.info(f"✅ Converted tool result for '{func_name}' to Google function_response")
+                except Exception as e:
+                    logger.error(f"❌ Failed to create function_response part for '{func_name}': {e}")
+                    logger.error(f"   result_content type: {type(result_content)}, length: {len(result_content)}")
+                    # Skip this message rather than failing the whole request
+                    logger.warning(f"⚠️ Skipping tool result message due to conversion error")
 
             else:
                 logger.warning(f"⚠️ Skipping message with unknown role: {role}")
