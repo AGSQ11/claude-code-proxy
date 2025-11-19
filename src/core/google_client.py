@@ -492,15 +492,28 @@ class GoogleGenAIClient:
                 logger.info(f"🛑 Request {request_id} was cancelled, stopping stream")
                 break
 
-            # Extract text from chunk (handle both missing attribute and None value)
+            # Extract text and function calls from chunk
             chunk_text = getattr(chunk, "text", None) or ""
+            function_calls = []
+
+            # Check for function_call parts in the chunk
+            if hasattr(chunk, "candidates") and chunk.candidates:
+                candidate = chunk.candidates[0]
+                if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+                    for part in candidate.content.parts:
+                        if hasattr(part, "function_call"):
+                            fc = part.function_call
+                            function_calls.append({
+                                "name": getattr(fc, "name", ""),
+                                "args": dict(getattr(fc, "args", {}))
+                            })
 
             # Log chunk details for debugging
             chunk_has_text = getattr(chunk, "text", None) is not None
-            logger.info(f"📝 Chunk text length: {len(chunk_text)} chars (chunk.text={'present' if chunk_has_text else 'None'})")
+            logger.info(f"📝 Chunk text length: {len(chunk_text)} chars (chunk.text={'present' if chunk_has_text else 'None'}), function_calls={len(function_calls)}")
 
             # Check for safety ratings or finish reasons if text is None
-            if not chunk_has_text:
+            if not chunk_has_text and not function_calls:
                 # Log additional chunk attributes to understand why text is None
                 chunk_attrs = dir(chunk)
                 if hasattr(chunk, "candidates") and chunk.candidates:
@@ -511,7 +524,27 @@ class GoogleGenAIClient:
                 else:
                     logger.warning(f"⚠️ Chunk with None text - chunk attributes: {[attr for attr in chunk_attrs if not attr.startswith('_')]}")
 
+            # Build delta based on what's present
+            delta = {}
             if chunk_text:
+                delta["content"] = chunk_text
+
+            if function_calls:
+                # Convert Google function_call to OpenAI tool_calls format
+                tool_calls = []
+                for idx, fc in enumerate(function_calls):
+                    tool_calls.append({
+                        "id": f"call_{chunk_id}_{idx}",
+                        "type": "function",
+                        "function": {
+                            "name": fc["name"],
+                            "arguments": json.dumps(fc["args"])
+                        }
+                    })
+                delta["tool_calls"] = tool_calls
+                logger.info(f"🔧 Converted {len(function_calls)} function calls to tool_calls")
+
+            if delta:
                 # Build OpenAI-format chunk
                 chunk_data = {
                     "id": chunk_id,
@@ -521,7 +554,7 @@ class GoogleGenAIClient:
                     "choices": [
                         {
                             "index": 0,
-                            "delta": {"content": chunk_text},
+                            "delta": delta,
                             "finish_reason": None,
                         }
                     ],
