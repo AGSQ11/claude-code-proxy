@@ -235,6 +235,40 @@ class GoogleGenAIClient:
 
         return contents, system_instruction
 
+    def _clean_schema_for_google(self, schema: dict) -> dict:
+        """Remove fields from JSON Schema that Google API doesn't support.
+
+        Args:
+            schema: JSON Schema dict (potentially with unsupported fields)
+
+        Returns:
+            Cleaned schema dict
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        # Fields to remove (not supported by Google)
+        unsupported_fields = ["$schema", "additionalProperties"]
+
+        cleaned = {}
+        for key, value in schema.items():
+            # Skip unsupported fields
+            if key in unsupported_fields:
+                continue
+
+            # Recursively clean nested objects
+            if isinstance(value, dict):
+                cleaned[key] = self._clean_schema_for_google(value)
+            elif isinstance(value, list):
+                cleaned[key] = [
+                    self._clean_schema_for_google(item) if isinstance(item, dict) else item
+                    for item in value
+                ]
+            else:
+                cleaned[key] = value
+
+        return cleaned
+
     def _convert_tools_to_google_format(self, openai_tools: list) -> Optional[types.Tool]:
         """Convert OpenAI format tools to Google GenAI format.
 
@@ -260,9 +294,9 @@ class GoogleGenAIClient:
                     "description": func.get("description", ""),
                 }
 
-                # Parameters use same JSON Schema format
+                # Clean and add parameters (remove unsupported fields like $schema)
                 if "parameters" in func:
-                    function_decl["parameters"] = func["parameters"]
+                    function_decl["parameters"] = self._clean_schema_for_google(func["parameters"])
 
                 function_declarations.append(function_decl)
                 logger.info(f"✅ Converted tool '{func.get('name')}' to Google format")
