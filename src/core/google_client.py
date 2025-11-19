@@ -688,7 +688,17 @@ class GoogleGenAIClient:
                 # Yield as SSE event
                 yielded_count += 1
                 logger.info(f"⬆️ Yielding chunk #{yielded_count} to client...")
-                yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+                logger.info(f"   Delta keys: {list(delta.keys())}")
+                if "content" in delta:
+                    logger.info(f"   Content: {delta['content'][:100]}..." if len(delta.get('content', '')) > 100 else f"   Content: {delta['content']}")
+                if "tool_calls" in delta:
+                    logger.info(f"   Tool calls: {len(delta['tool_calls'])} calls")
+                    for tc in delta['tool_calls']:
+                        logger.info(f"     - {tc.get('type')}: {tc.get('function', {}).get('name')}")
+
+                chunk_json = json.dumps(chunk_data, ensure_ascii=False)
+                logger.info(f"   Full chunk JSON: {chunk_json[:500]}..." if len(chunk_json) > 500 else f"   Full chunk JSON: {chunk_json}")
+                yield f"data: {chunk_json}\n\n"
                 logger.info(f"✅ Chunk #{yielded_count} yielded successfully")
 
         # Check if we yielded any content
