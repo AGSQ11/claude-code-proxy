@@ -1,9 +1,12 @@
 """Client Manager for handling multiple API providers per model tier."""
 
-from typing import Dict, Union
+from typing import Dict, Union, TYPE_CHECKING
 from src.core.client import OpenAIClient
-from src.core.google_client import GoogleGenAIClient
 from src.core.config import config
+
+# Lazy import for Google GenAI to avoid requiring it when not used
+if TYPE_CHECKING:
+    from src.core.google_client import GoogleGenAIClient
 
 
 class ClientManager:
@@ -11,7 +14,7 @@ class ClientManager:
 
     def __init__(self):
         """Initialize clients for each model tier based on provider type."""
-        self.clients: Dict[str, Union[OpenAIClient, GoogleGenAIClient]] = {}
+        self.clients: Dict[str, Union[OpenAIClient, "GoogleGenAIClient"]] = {}
 
         # Create client for BIG model
         self.clients['big'] = self._create_client(
@@ -47,7 +50,7 @@ class ClientManager:
         api_key: str,
         base_url: str,
         azure_api_version: str = None,
-    ) -> Union[OpenAIClient, GoogleGenAIClient]:
+    ) -> Union[OpenAIClient, "GoogleGenAIClient"]:
         """Create appropriate client based on provider type.
 
         Args:
@@ -63,11 +66,22 @@ class ClientManager:
         provider = provider.lower()
 
         if provider == "google":
-            print(f"   {tier} model using Google Generative AI")
-            return GoogleGenAIClient(
-                api_key=api_key,
-                timeout=config.request_timeout,
-            )
+            # Lazy import Google client only when needed
+            try:
+                from src.core.google_client import GoogleGenAIClient
+                print(f"   {tier} model using Google Generative AI")
+                return GoogleGenAIClient(
+                    api_key=api_key,
+                    timeout=config.request_timeout,
+                )
+            except ImportError as e:
+                print(f"❌ Error: Google Generative AI package not installed")
+                print(f"   Install with: pip install google-generativeai")
+                print(f"   Or run: uv pip install google-generativeai")
+                raise ImportError(
+                    f"google-generativeai package is required for provider='google'. "
+                    f"Install with: pip install google-generativeai"
+                ) from e
         else:  # Default to OpenAI
             return OpenAIClient(
                 api_key=api_key,
@@ -77,7 +91,7 @@ class ClientManager:
                 custom_headers=config.get_custom_headers(tier),
             )
 
-    def get_client_for_model(self, model_name: str) -> Union[OpenAIClient, GoogleGenAIClient]:
+    def get_client_for_model(self, model_name: str) -> Union[OpenAIClient, "GoogleGenAIClient"]:
         """Get the appropriate client for a given model name.
 
         Args:
