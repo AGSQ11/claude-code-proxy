@@ -177,19 +177,34 @@ class GoogleGenAIClient:
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
+            # Skip messages with tool calls or function calls (not supported in conversion)
+            if "tool_calls" in msg or "function_call" in msg:
+                logger.warning(f"⚠️ Skipping message with tool_calls/function_call - not supported by Google API")
+                continue
+
             # Handle both string and list content (for multimodal messages)
             if isinstance(content, list):
-                # Extract text from content parts
+                # Extract text from content parts, skip tool_use blocks
                 text_parts = []
                 for part in content:
                     if isinstance(part, dict):
-                        if part.get("type") == "text":
+                        # Skip tool_use, tool_result, function_call parts
+                        part_type = part.get("type", "")
+                        if part_type in ["tool_use", "tool_result", "function_call"]:
+                            logger.warning(f"⚠️ Skipping {part_type} content part - not supported by Google API")
+                            continue
+                        elif part_type == "text":
                             text_parts.append(part.get("text", ""))
                     elif isinstance(part, str):
                         text_parts.append(part)
-                content_text = " ".join(text_parts)
+                content_text = " ".join(text_parts) if text_parts else ""
             else:
-                content_text = str(content)
+                content_text = str(content) if content else ""
+
+            # Skip empty messages
+            if not content_text.strip():
+                logger.warning(f"⚠️ Skipping empty {role} message after filtering")
+                continue
 
             if role == "system":
                 # System messages become system instructions
@@ -206,15 +221,56 @@ class GoogleGenAIClient:
                     role="model",
                     parts=[types.Part.from_text(text=content_text)]
                 ))
+            else:
+                # Skip tool, function, or other unknown roles
+                logger.warning(f"⚠️ Skipping message with unknown role: {role}")
 
         # If no contents, add a default user message
         if not contents:
+            logger.warning(f"⚠️ No valid contents after filtering, adding default message")
             contents.append(types.Content(
                 role="user",
                 parts=[types.Part.from_text(text="Hello")]
             ))
 
         return contents, system_instruction
+
+    def _convert_tools_to_google_format(self, openai_tools: list) -> Optional[types.Tool]:
+        """Convert OpenAI format tools to Google GenAI format.
+
+        Args:
+            openai_tools: List of OpenAI-format tool definitions
+
+        Returns:
+            Google types.Tool object or None
+        """
+        if not openai_tools:
+            return None
+
+        function_declarations = []
+
+        for tool in openai_tools:
+            # OpenAI format: {"type": "function", "function": {...}}
+            if tool.get("type") == "function":
+                func = tool.get("function", {})
+
+                # Google format uses same schema structure for parameters
+                function_decl = {
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                }
+
+                # Parameters use same JSON Schema format
+                if "parameters" in func:
+                    function_decl["parameters"] = func["parameters"]
+
+                function_declarations.append(function_decl)
+                logger.info(f"✅ Converted tool '{func.get('name')}' to Google format")
+
+        if function_declarations:
+            return types.Tool(function_declarations=function_declarations)
+
+        return None
 
     def _build_config(self, request: Dict[str, Any], system_instruction: Optional[list]) -> Any:
         """Build GenerateContentConfig from request parameters.
@@ -237,6 +293,28 @@ class GoogleGenAIClient:
                 types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
             ],
         }
+
+        # Convert and add tools if present
+        if "tools" in request and request["tools"]:
+            google_tools = self._convert_tools_to_google_format(request["tools"])
+            if google_tools:
+                config_params["tools"] = [google_tools]
+                logger.info(f"✅ Added {len(request['tools'])} tools to config")
+
+        # Note: tool_choice and parallel_tool_calls handled differently in Google API
+        # Google uses automatic_function_calling config instead
+        if "tool_choice" in request:
+            tool_choice = request["tool_choice"]
+            if tool_choice == "none":
+                # Disable automatic function calling
+                config_params["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=True)
+                logger.info("🔧 Disabled automatic function calling (tool_choice=none)")
+            elif tool_choice == "auto":
+                # Enable automatic function calling (default behavior)
+                logger.info("🔧 Using automatic function calling (tool_choice=auto)")
+            # "required" and specific function forcing not directly supported, log warning
+            elif isinstance(tool_choice, dict):
+                logger.warning(f"⚠️ Specific tool_choice not supported, using automatic function calling")
 
         # Add system instruction if present
         if system_instruction:
