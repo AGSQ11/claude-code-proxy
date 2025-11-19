@@ -256,8 +256,8 @@ class GoogleGenAIClient:
         Returns:
             OpenAI-format response dict
         """
-        # Extract text from Google response
-        text = response.text if hasattr(response, "text") else ""
+        # Extract text from Google response (handle both missing attribute and None value)
+        text = getattr(response, "text", None) or ""
 
         # Build OpenAI-format response
         return {
@@ -369,9 +369,9 @@ class GoogleGenAIClient:
                 logger.info(f"🛑 Request {request_id} was cancelled, stopping stream")
                 break
 
-            # Extract text from chunk
-            chunk_text = chunk.text if hasattr(chunk, "text") else ""
-            logger.info(f"📝 Chunk text length: {len(chunk_text)} chars")
+            # Extract text from chunk (handle both missing attribute and None value)
+            chunk_text = getattr(chunk, "text", None) or ""
+            logger.info(f"📝 Chunk text length: {len(chunk_text)} chars (chunk.text={'None' if getattr(chunk, 'text', None) is None else 'present'})")
 
             if chunk_text:
                 # Build OpenAI-format chunk
