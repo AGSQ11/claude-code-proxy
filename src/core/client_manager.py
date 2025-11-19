@@ -86,11 +86,11 @@ class ClientManager:
                 ), "google"
             except ImportError as e:
                 print(f"   ❌ Error: Google Generative AI package not installed")
-                print(f"      Install with: pip install google-generativeai")
-                print(f"      Or run: uv pip install google-generativeai")
+                print(f"      Install with: pip install google-genai")
+                print(f"      Or run: uv pip install google-genai")
                 raise ImportError(
-                    f"google-generativeai package is required for provider='google'. "
-                    f"Install with: pip install google-generativeai"
+                    f"google-genai package is required for provider='google'. "
+                    f"Install with: pip install google-genai"
                 ) from e
         else:  # Default to OpenAI
             print(f"   ✅ Using OpenAI-compatible API")

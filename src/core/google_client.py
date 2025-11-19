@@ -9,7 +9,7 @@ from typing import Optional, AsyncGenerator, Dict, Any
 from fastapi import HTTPException
 
 try:
-    import google.generativeai as genai
+    from google import genai
 except ImportError:
     genai = None  # Will be checked when creating client
 
@@ -29,22 +29,22 @@ class GoogleGenAIClient:
         """
         if genai is None:
             raise ImportError(
-                "google-generativeai package is not installed. "
-                "Install with: pip install google-generativeai"
+                "google-genai package is not installed. "
+                "Install with: pip install google-genai"
             )
 
         self.api_key = api_key
         self.timeout = timeout
 
-        # Configure the genai library with API key
-        genai.configure(api_key=api_key)
+        # Create the genai client with API key
+        self.client = genai.Client(api_key=api_key)
 
         self.active_requests: Dict[str, asyncio.Event] = {}
 
     async def create_chat_completion(
         self, request: Dict[str, Any], request_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Send chat completion to Google GenAI API.
+        """Create a non-streaming chat completion using Google's native API.
 
         Args:
             request: OpenAI-format request dict
@@ -53,35 +53,33 @@ class GoogleGenAIClient:
         Returns:
             OpenAI-format response dict
         """
-        # Create cancellation token if request_id provided
-        if request_id:
-            cancel_event = asyncio.Event()
-            self.active_requests[request_id] = cancel_event
-
         try:
-            # Convert OpenAI format to Google format
+            # Track this request for potential cancellation
+            if request_id:
+                self.active_requests[request_id] = asyncio.Event()
+
+            # Extract parameters
             model = request.get("model", "gemini-2.0-flash-exp")
             messages = request.get("messages", [])
 
             # Build contents from messages
             contents = self._convert_messages_to_contents(messages)
 
-            # Create model and generate content
-            model_instance = genai.GenerativeModel(model)
+            # Call Google API (blocking, so run in thread pool)
             response = await asyncio.to_thread(
-                model_instance.generate_content,
-                contents,
+                self.client.models.generate_content,
+                model=model,
+                contents=contents,
             )
 
             # Convert response to OpenAI format
             return self._convert_response_to_openai(response, request)
 
         except Exception as e:
-            logger.error(f"Google GenAI API error: {e}")
+            error_msg = f"Google API error: {str(e)}"
+            logger.error(f"Error in Google API call: {error_msg}")
             logger.error(traceback.format_exc())
-            raise HTTPException(
-                status_code=500, detail=f"Google API error: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=error_msg)
 
         finally:
             # Clean up active request tracking
@@ -91,34 +89,36 @@ class GoogleGenAIClient:
     async def create_chat_completion_stream(
         self, request: Dict[str, Any], request_id: Optional[str] = None
     ) -> AsyncGenerator[str, None]:
-        """Send streaming chat completion to Google GenAI API.
+        """Create a streaming chat completion using Google's native API.
+
+        Note: Since this is used with StreamingResponse, we must ALWAYS yield error events
+        in SSE format instead of raising HTTPException.
 
         Args:
             request: OpenAI-format request dict
             request_id: Optional request ID for cancellation tracking
 
         Yields:
-            SSE-formatted response chunks
+            SSE-formatted chunks (data: {...}\n\n)
         """
-        # Create cancellation token if request_id provided
-        if request_id:
-            cancel_event = asyncio.Event()
-            self.active_requests[request_id] = cancel_event
-
         try:
-            # Convert OpenAI format to Google format
+            # Track this request for potential cancellation
+            if request_id:
+                self.active_requests[request_id] = asyncio.Event()
+
+            # Extract parameters
             model = request.get("model", "gemini-2.0-flash-exp")
             messages = request.get("messages", [])
 
             # Build contents from messages
             contents = self._convert_messages_to_contents(messages)
 
-            # Create model and stream content
-            model_instance = genai.GenerativeModel(model)
-
-            # Generate content stream (this is a blocking call, so run in thread)
+            # Stream from Google API (blocking, so run in thread pool)
             def _generate_stream():
-                return model_instance.generate_content(contents, stream=True)
+                return self.client.models.generate_content_stream(
+                    model=model,
+                    contents=contents,
+                )
 
             stream = await asyncio.to_thread(_generate_stream)
 
@@ -126,30 +126,27 @@ class GoogleGenAIClient:
             async for chunk in self._stream_to_openai_format(stream, model, request_id):
                 yield chunk
 
-            # Signal end of stream
-            yield "data: [DONE]"
-
         except Exception as e:
             error_msg = f"Google API error: {str(e)}"
             logger.error(f"Unexpected error in streaming: {error_msg}")
             logger.error(traceback.format_exc())
             # Always yield error event in SSE format (response already started)
             error_data = {"error": {"type": "api_error", "message": error_msg}}
-            yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
 
         finally:
             # Clean up active request tracking
             if request_id and request_id in self.active_requests:
                 del self.active_requests[request_id]
 
-    def _convert_messages_to_contents(self, messages: list) -> str:
+    def _convert_messages_to_contents(self, messages: list) -> list:
         """Convert OpenAI messages to Google contents format.
 
         Args:
             messages: List of OpenAI-format messages
 
         Returns:
-            Combined content string for Google API
+            List of content strings for Google API
         """
         # For simplicity, combine all messages into a single prompt
         # Google's genai SDK handles multi-turn differently, but this works for basic use
@@ -180,7 +177,9 @@ class GoogleGenAIClient:
             elif role == "assistant":
                 content_parts.append(f"Assistant: {content_text}")
 
-        return "\n\n".join(content_parts) if content_parts else "Hello"
+        combined = "\n\n".join(content_parts) if content_parts else "Hello"
+        # Return as list of strings (Google API expects list)
+        return [combined]
 
     def _convert_response_to_openai(
         self, response: Any, original_request: Dict[str, Any]
@@ -199,7 +198,7 @@ class GoogleGenAIClient:
 
         # Build OpenAI-format response
         return {
-            "id": f"chatcmpl-{response.model_version if hasattr(response, 'model_version') else 'google'}",
+            "id": f"chatcmpl-google-{int(asyncio.get_event_loop().time())}",
             "object": "chat.completion",
             "created": int(asyncio.get_event_loop().time()),
             "model": original_request.get("model", "gemini-2.0-flash-exp"),
@@ -264,22 +263,15 @@ class GoogleGenAIClient:
                 and request_id in self.active_requests
                 and self.active_requests[request_id].is_set()
             ):
-                logger.info(f"Request {request_id} cancelled by client")
-                error_data = {
-                    "error": {
-                        "type": "cancelled",
-                        "message": "Request cancelled by client",
-                    }
-                }
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}"
-                return
+                logger.info(f"Request {request_id} was cancelled, stopping stream")
+                break
 
             # Extract text from chunk
-            text = chunk.text if hasattr(chunk, "text") else ""
+            chunk_text = chunk.text if hasattr(chunk, "text") else ""
 
-            if text:
+            if chunk_text:
                 # Build OpenAI-format chunk
-                openai_chunk = {
+                chunk_data = {
                     "id": chunk_id,
                     "object": "chat.completion.chunk",
                     "created": int(asyncio.get_event_loop().time()),
@@ -287,13 +279,14 @@ class GoogleGenAIClient:
                     "choices": [
                         {
                             "index": 0,
-                            "delta": {"content": text, "role": "assistant"},
+                            "delta": {"content": chunk_text},
                             "finish_reason": None,
                         }
                     ],
                 }
 
-                yield f"data: {json.dumps(openai_chunk, ensure_ascii=False)}"
+                # Yield as SSE event
+                yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
 
         # Send final chunk with finish_reason
         final_chunk = {
@@ -302,53 +295,18 @@ class GoogleGenAIClient:
             "created": int(asyncio.get_event_loop().time()),
             "model": model,
             "choices": [
-                {
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }
+                {"index": 0, "delta": {}, "finish_reason": "stop"}
             ],
         }
-        yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}"
+        yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
 
-    def classify_openai_error(self, error_detail: Any) -> str:
-        """Provide error guidance for Google API issues.
-
-        Args:
-            error_detail: Error details
-
-        Returns:
-            User-friendly error message
-        """
-        error_str = str(error_detail).lower()
-
-        # API key issues
-        if "invalid api key" in error_str or "unauthorized" in error_str:
-            return "Invalid Google API key. Get a key from https://aistudio.google.com/apikey"
-
-        # Rate limiting
-        if "rate limit" in error_str or "quota" in error_str:
-            return "Google API rate limit exceeded. Please wait and try again."
-
-        # Model not found
-        if "model" in error_str and (
-            "not found" in error_str or "does not exist" in error_str
-        ):
-            return "Model not found. Check your model name (e.g., gemini-2.0-flash-exp)"
-
-        # Default: return original message
-        return str(error_detail)
-
-    def cancel_request(self, request_id: str) -> bool:
-        """Cancel an active request by request_id.
+    async def cancel_request(self, request_id: str):
+        """Cancel an ongoing request.
 
         Args:
-            request_id: Request ID to cancel
-
-        Returns:
-            True if request was found and cancelled
+            request_id: The request ID to cancel
         """
         if request_id in self.active_requests:
             self.active_requests[request_id].set()
-            return True
-        return False
+            logger.info(f"Cancellation requested for {request_id}")
