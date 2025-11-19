@@ -7,8 +7,11 @@ import traceback
 from typing import Optional, AsyncGenerator, Dict, Any
 
 from fastapi import HTTPException
-from google import genai
-from google.genai import types
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None  # Will be checked when creating client
 
 
 logger = logging.getLogger(__name__)
@@ -24,9 +27,18 @@ class GoogleGenAIClient:
             api_key: Google API key from AI Studio
             timeout: Request timeout in seconds
         """
+        if genai is None:
+            raise ImportError(
+                "google-generativeai package is not installed. "
+                "Install with: pip install google-generativeai"
+            )
+
         self.api_key = api_key
         self.timeout = timeout
-        self.client = genai.Client(api_key=api_key)
+
+        # Configure the genai library with API key
+        genai.configure(api_key=api_key)
+
         self.active_requests: Dict[str, asyncio.Event] = {}
 
     async def create_chat_completion(
@@ -54,11 +66,11 @@ class GoogleGenAIClient:
             # Build contents from messages
             contents = self._convert_messages_to_contents(messages)
 
-            # Call Google API
+            # Create model and generate content
+            model_instance = genai.GenerativeModel(model)
             response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=model,
-                contents=contents,
+                model_instance.generate_content,
+                contents,
             )
 
             # Convert response to OpenAI format
@@ -101,12 +113,14 @@ class GoogleGenAIClient:
             # Build contents from messages
             contents = self._convert_messages_to_contents(messages)
 
-            # Stream from Google API
-            stream = await asyncio.to_thread(
-                self.client.models.generate_content_stream,
-                model=model,
-                contents=contents,
-            )
+            # Create model and stream content
+            model_instance = genai.GenerativeModel(model)
+
+            # Generate content stream (this is a blocking call, so run in thread)
+            def _generate_stream():
+                return model_instance.generate_content(contents, stream=True)
+
+            stream = await asyncio.to_thread(_generate_stream)
 
             # Convert stream to OpenAI SSE format
             async for chunk in self._stream_to_openai_format(stream, model, request_id):
@@ -207,16 +221,29 @@ class GoogleGenAIClient:
         """Convert Google stream to OpenAI SSE format.
 
         Args:
-            stream: Google GenAI stream
+            stream: Google GenAI stream (generator)
             model: Model name
             request_id: Optional request ID for cancellation
 
         Yields:
             SSE-formatted chunks
         """
-        chunk_id = f"chatcmpl-google-{asyncio.get_event_loop().time()}"
+        chunk_id = f"chatcmpl-google-{int(asyncio.get_event_loop().time())}"
 
-        for chunk in stream:
+        # Iterate through the stream (which is a blocking generator)
+        # We need to run this in a thread pool to avoid blocking
+        def _iterate_stream():
+            chunks = []
+            try:
+                for chunk in stream:
+                    chunks.append(chunk)
+            except Exception as e:
+                logger.error(f"Error iterating stream: {e}")
+            return chunks
+
+        chunks = await asyncio.to_thread(_iterate_stream)
+
+        for chunk in chunks:
             # Check for cancellation
             if (
                 request_id
