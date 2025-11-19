@@ -1,127 +1,549 @@
-# Claude Code: Best Practices for Effective Collaboration
+# Claude Code Proxy
 
-This document outlines best practices for working with Claude Code to ensure efficient and successful software development tasks.
+## Project Overview
 
-## Task Management
+**Claude Code Proxy** is a FastAPI-based proxy server that enables Claude Code (Anthropic's CLI tool) to work with multiple AI model providers through an OpenAI-compatible API interface. The proxy translates between Claude Code's requests (which expect OpenAI API format) and various backend providers including OpenAI, Azure OpenAI, Google Generative AI, and other OpenAI-compatible endpoints.
 
-For complex or multi-step tasks, Claude Code will use:
-*   **TodoWrite**: To create a structured task list, breaking down the work into manageable steps. This provides clarity on the plan and allows for tracking progress.
-*   **TodoRead**: To review the current list of tasks and their status, ensuring alignment and that all objectives are being addressed.
+## Purpose
 
-## File Handling and Reading
+Claude Code is designed to work with models that follow the OpenAI API specification. However, many powerful models (like Google's Gemini) use different API formats. This proxy bridges that gap by:
 
-Understanding file content is crucial before making modifications.
+1. **Accepting OpenAI-format requests** from Claude Code
+2. **Translating requests** to the appropriate provider's format
+3. **Converting responses** back to OpenAI format
+4. **Managing multiple providers** across different model tiers
 
-1.  **Targeted Information Retrieval**:
-    *   When searching for specific content, patterns, or definitions within a codebase, prefer using search tools like `Grep` or `Task` (with a focused search prompt). This is more efficient than reading entire files.
+## Architecture
 
-2.  **Reading File Content**:
-    *   **Small to Medium Files**: For files where full context is needed or that are not excessively large, the `Read` tool can be used to retrieve the entire content.
-    *   **Large File Strategy**:
-        1.  **Assess Size**: Before reading a potentially large file, its size should be determined (e.g., using `ls -l` via the `Bash` tool or by an initial `Read` with a small `limit` to observe if content is truncated).
-        2.  **Chunked Reading**: If a file is large (e.g., over a few thousand lines), it should be read in manageable chunks (e.g., 1000-2000 lines at a time) using the `offset` and `limit` parameters of the `Read` tool. This ensures all content can be processed without issues.
-    *   Always ensure that the file path provided to `Read` is absolute.
+### Core Components
 
-## File Editing
+```
+Claude Code (client)
+    ↓ OpenAI API format
+[FastAPI Proxy Server]
+    ├── Model Mapping Layer (claude models → provider models)
+    ├── Client Manager (per-tier provider clients)
+    │   ├── OpenAI Client (for OpenAI/Azure/compatible APIs)
+    │   └── Google GenAI Client (for Google Gemini models)
+    └── Request/Response Translation
+    ↓
+Backend Providers (OpenAI, Google, Azure, etc.)
+```
 
-Precision is key for successful file edits. The following strategies lead to reliable modifications:
+### File Structure
 
-1.  **Pre-Edit Read**: **Always** use the `Read` tool to fetch the content of the file *immediately before* attempting any `Edit` or `MultiEdit` operation. This ensures modifications are based on the absolute latest version of the file.
+```
+claude-code-proxy/
+├── src/
+│   ├── core/
+│   │   ├── client.py              # OpenAI client (for OpenAI-compatible APIs)
+│   │   ├── google_client.py       # Google GenAI SDK client
+│   │   ├── google_rest_client.py  # Google REST API client (alternative)
+│   │   ├── client_manager.py      # Multi-provider client factory
+│   │   ├── config.py              # Configuration management
+│   │   └── model_mapper.py        # Claude model → provider model mapping
+│   ├── routes/
+│   │   └── chat.py                # /v1/chat/completions endpoints
+│   ├── middleware/
+│   │   └── auth.py                # API key authentication
+│   └── main.py                    # FastAPI application entry point
+├── pyproject.toml                 # Dependencies and project metadata
+└── .env                           # Configuration (not in repo)
+```
 
-2.  **Constructing `old_string` (The text to be replaced)**:
-    *   **Exact Match**: The `old_string` must be an *exact* character-for-character match of the segment in the file you intend to replace. This includes all whitespace (spaces, tabs, newlines) and special characters.
-    *   **No Read Artifacts**: Crucially, do *not* include any formatting artifacts from the `Read` tool's output (e.g., `cat -n` style line numbers or display-only leading tabs) in the `old_string`. It must only contain the literal characters as they exist in the raw file.
-    *   **Sufficient Context & Uniqueness**: Provide enough context (surrounding lines) in `old_string` to make it uniquely identifiable at the intended edit location. The "Anchor on a Known Good Line" strategy is preferred: `old_string` is a larger, unique block of text surrounding the change or insertion point. This is highly reliable.
+## Key Features
 
-3.  **Constructing `new_string` (The replacement text)**:
-    *   **Exact Representation**: The `new_string` must accurately represent the desired state of the code, including correct indentation, whitespace, and newlines.
-    *   **No Read Artifacts**: As with `old_string`, ensure `new_string` does *not* contain any `Read` tool output artifacts.
+### 1. Multi-Provider Support
 
-4.  **Choosing the Right Editing Tool**:
-    *   **`Edit` Tool**: Suitable for a single, well-defined replacement in a file.
-    *   **`MultiEdit` Tool**: Preferred when multiple changes are needed within the same file. Edits are applied sequentially, with each subsequent edit operating on the result of the previous one. This tool is highly effective for complex modifications.
+Each model tier (BIG/MIDDLE/SMALL) can use a different provider:
 
-5.  **Verification**:
-    *   The success confirmation from the `Edit` or `MultiEdit` tool (especially if `expected_replacements` is used and matches) is the primary indicator that the change was made.
-    *   If further visual confirmation is needed, use the `Read` tool with `offset` and `limit` parameters to view only the specific section of the file that was changed, rather than re-reading the entire file.
+```env
+# Example: Mix Google, OpenAI, and Azure
+BIG_MODEL_PROVIDER=google
+BIG_MODEL=gemini-3-pro-preview
+BIG_MODEL_API_KEY=your-google-api-key
 
-### Reliable Code Insertion with MultiEdit
+MIDDLE_MODEL_PROVIDER=openai
+MIDDLE_MODEL=gpt-4o
+MIDDLE_MODEL_API_KEY=your-openai-key
+MIDDLE_MODEL_BASE_URL=https://api.openai.com/v1
 
-When inserting larger blocks of new code (e.g., multiple functions or methods) where a simple `old_string` might be fragile due to surrounding code, the following `MultiEdit` strategy can be more robust:
+SMALL_MODEL_PROVIDER=openai
+SMALL_MODEL=gpt-4o-mini
+SMALL_MODEL_API_KEY=your-azure-key
+SMALL_MODEL_BASE_URL=https://your-azure.openai.azure.com
+SMALL_MODEL_AZURE_API_VERSION=2024-02-15-preview
+```
 
-1.  **First Edit - Targeted Insertion Point**: For the primary code block you want to insert (e.g., new methods within a class), identify a short, unique, and stable line of code immediately *after* your desired insertion point. Use this stable line as the `old_string`.
-    *   The `new_string` will consist of your new block of code, followed by a newline, and then the original `old_string` (the stable line you matched on).
-    *   Example: If inserting methods into a class, the `old_string` might be the closing brace `}` of the class, or a comment that directly follows the class.
+### 2. Google Generative AI Integration
 
-2.  **Second Edit (Optional) - Ancillary Code**: If there's another, smaller piece of related code to insert (e.g., a function call within an existing method, or an import statement), perform this as a separate, more straightforward edit within the `MultiEdit` call. This edit usually has a more clearly defined and less ambiguous `old_string`.
+**Two Implementation Approaches:**
 
-**Rationale**:
-*   By anchoring the main insertion on a very stable, unique line *after* the insertion point and prepending the new code to it, you reduce the risk of `old_string` mismatches caused by subtle variations in the code *before* the insertion point.
-*   Keeping ancillary edits separate allows them to succeed even if the main insertion point is complex, as they often target simpler, more reliable `old_string` patterns.
-*   This approach leverages `MultiEdit`'s sequential application of changes effectively.
+#### A. Google GenAI SDK (Current/Recommended)
+- Uses official `google-genai` Python SDK
+- Supports Vertex AI authentication with API keys
+- Native Python types (`types.Content`, `types.Part`, etc.)
+- Real-time streaming with background thread + queue
 
-**Example Scenario**: Adding new methods to a class and a call to one of these new methods elsewhere.
-*   **Edit 1**: Insert the new methods. `old_string` is the class's closing brace `}`. `new_string` is `
-    [new methods code]
-    }`.
-*   **Edit 2**: Insert the call to a new method. `old_string` is `// existing line before call`. `new_string` is `// existing line before call
-    this.newMethodCall();`.
+**Key Implementation Details:**
+```python
+# Client initialization
+os.environ['GOOGLE_CLOUD_API_KEY'] = api_key
+client = genai.Client(vertexai=True, api_key=api_key)
 
-This method provides a balance between precise editing and handling larger code insertions reliably when direct `old_string` matches for the entire new block are problematic.
+# Message conversion
+contents = [
+    types.Content(
+        role="user",  # or "model" for assistant
+        parts=[types.Part.from_text(text="message")]
+    )
+]
 
-## Handling Large Files for Incremental Refactoring
+# Configuration
+config = types.GenerateContentConfig(
+    temperature=1.0,
+    max_output_tokens=8192,
+    system_instruction=[types.Part.from_text(text="system prompt")],
+    safety_settings=[...]
+)
 
-When refactoring large files incrementally rather than rewriting them completely:
+# Streaming
+stream = client.models.generate_content_stream(
+    model="gemini-3-pro-preview",
+    contents=contents,
+    config=config
+)
+```
 
-1. **Initial Exploration and Planning**:
-   * Begin with targeted searches using `Grep` to locate specific patterns or sections within the file.
-   * Use `Bash` commands like `grep -n "pattern" file` to find line numbers for specific areas of interest.
-   * Create a clear mental model of the file structure before proceeding with edits.
+#### B. Google REST API (Alternative)
+- Direct HTTP calls to Google's REST endpoints
+- Two different API bases:
+  - Developer API: `generativelanguage.googleapis.com/v1beta` (most models)
+  - AI Platform API: `aiplatform.googleapis.com/v1/publishers/google` (Gemini 3 models)
+- Useful for debugging or when SDK has issues
 
-2. **Chunked Reading for Large Files**:
-   * For files too large to read at once, use multiple `Read` operations with different `offset` and `limit` parameters.
-   * Read sequential chunks to build a complete understanding of the file.
-   * Use `Grep` to pinpoint key sections, then read just those sections with targeted `offset` parameters.
+### 3. Model Tier System
 
-3. **Finding Key Implementation Sections**:
-   * Use `Bash` commands with `grep -A N` (to show N lines after a match) or `grep -B N` (to show N lines before) to locate function or method implementations.
-   * Example: `grep -n "function findTagBoundaries" -A 20 filename.js` to see the first 20 lines of a function.
+Claude Code uses three model tiers:
+- **claude-sonnet-4**: Maps to BIG_MODEL
+- **claude-opus-4**: Maps to BIG_MODEL
+- **claude-haiku-4**: Maps to SMALL_MODEL
+- **Other models**: Default to BIG_MODEL with warning
 
-4. **Pattern-Based Replacement Strategy**:
-   * Identify common patterns that need to be replaced across the file.
-   * Use the `Bash` tool with `sed` for quick previews of potential replacements.
-   * Example: `sed -n "s/oldPattern/newPattern/gp" filename.js` to preview changes without making them.
+Each tier can be independently configured with different providers.
 
-5. **Sequential Selective Edits**:
-   * Target specific sections or patterns one at a time rather than attempting a complete rewrite.
-   * Focus on clearest/simplest cases first to establish a pattern of successful edits.
-   * Use `Edit` for well-defined single changes within the file.
+### 4. Streaming Support
 
-6. **Batch Similar Changes Together**:
-   * Group similar types of changes (e.g., all references to a particular function or variable).
-   * Use `Bash` with `sed` to preview the scope of batch changes: `grep -n "pattern" filename.js | wc -l`
-   * For systematic changes across a file, consider using `sed` through the `Bash` tool: `sed -i "s/oldPattern/newPattern/g" filename.js`
+Both streaming and non-streaming requests are fully supported:
 
-7. **Incremental Verification**:
-   * After each set of changes, verify the specific sections that were modified.
-   * For critical components, read the surrounding context to ensure the changes integrate correctly.
-   * Validate that each change maintains the file's structure and logic before proceeding to the next.
+**Streaming Implementation (Google):**
+```python
+async def create_chat_completion_stream():
+    # Create stream in thread pool (SDK is blocking)
+    stream = await asyncio.to_thread(
+        client.models.generate_content_stream,
+        model=model,
+        contents=contents,
+        config=config
+    )
 
-8. **Progress Tracking for Large Refactors**:
-   * Use the `TodoWrite` tool to track which sections or patterns have been updated.
-   * Create a checklist of all required changes and mark them off as they're completed.
-   * Record any sections that require special attention or that couldn't be automatically refactored.
+    # Use queue + background thread for real-time streaming
+    # (avoids buffering all chunks before sending)
+    chunk_queue = queue.Queue()
 
-## Commit Messages
+    def _stream_reader():
+        for chunk in stream:
+            chunk_queue.put(("chunk", chunk))
+        chunk_queue.put(("done", None))
 
-When Claude Code generates commit messages on your behalf:
-*   The `Co-Authored-By: Claude <noreply@anthropic.com>` line will **not** be included.
-*   The `🤖 Generated with [Claude Code](https://claude.ai/code)` line will **not** be included.
+    threading.Thread(target=_stream_reader, daemon=True).start()
 
-## General Interaction
+    # Yield chunks as they arrive
+    while True:
+        item_type, item_data = await asyncio.to_thread(
+            chunk_queue.get, timeout=60.0
+        )
+        if item_type == "done":
+            break
+        elif item_type == "chunk":
+            chunk_text = getattr(item_data, "text", None) or ""
+            if chunk_text:
+                yield sse_formatted_chunk(chunk_text)
+```
 
-Claude Code will directly apply proposed changes and modifications using the available tools, rather than describing them and asking you to implement them manually. This ensures a more efficient and direct workflow.
+### 5. Request Cancellation
 
-## Recent Changes
+The proxy supports cancelling ongoing requests:
+- Tracks active requests by ID
+- Uses asyncio Events for cancellation signaling
+- Stops streaming when cancellation is detected
 
-- Updated MIDDLE_MODEL config to default to BIG_MODEL value for consistency
+## Configuration
+
+### Environment Variables
+
+**Proxy Server:**
+```env
+HOST=0.0.0.0
+PORT=8000
+AUTH_KEY=your-secret-key-for-claude-code
+REQUEST_TIMEOUT=90
+LOG_LEVEL=INFO
+```
+
+**Model Tiers (repeat for MIDDLE and SMALL):**
+```env
+BIG_MODEL_PROVIDER=google  # or "openai"
+BIG_MODEL=gemini-3-pro-preview
+BIG_MODEL_API_KEY=your-api-key
+BIG_MODEL_BASE_URL=https://api.openai.com/v1  # OpenAI provider only
+BIG_MODEL_AZURE_API_VERSION=2024-02-15-preview  # Azure only
+```
+
+**Legacy (backward compatibility):**
+```env
+OPENAI_API_KEY=fallback-key  # Used if tier-specific keys not set
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+### Claude Code Configuration
+
+In your Claude Code config (typically `~/.config/claude/config.json`):
+
+```json
+{
+  "api": {
+    "baseURL": "http://localhost:8000/v1",
+    "apiKey": "your-secret-key-for-claude-code"
+  },
+  "models": {
+    "big": "claude-sonnet-4",
+    "middle": "claude-opus-4",
+    "small": "claude-haiku-4"
+  }
+}
+```
+
+## Technical Implementation Details
+
+### Message Format Conversion
+
+**OpenAI → Google:**
+```python
+# OpenAI format
+{
+    "role": "system",
+    "content": "You are a helpful assistant"
+}
+
+# Converted to Google format
+system_instruction = [
+    types.Part.from_text(text="You are a helpful assistant")
+]
+
+# User messages
+{
+    "role": "user",
+    "content": "Hello"
+}
+→
+types.Content(role="user", parts=[types.Part.from_text(text="Hello")])
+
+# Assistant messages
+{
+    "role": "assistant",
+    "content": "Hi there"
+}
+→
+types.Content(role="model", parts=[types.Part.from_text(text="Hi there")])
+```
+
+### Response Format Conversion
+
+**Google → OpenAI:**
+```python
+# Google response
+response.text = "Generated text"
+response.usage_metadata = {
+    "prompt_token_count": 10,
+    "candidates_token_count": 20,
+    "total_token_count": 30
+}
+
+# Converted to OpenAI format
+{
+    "id": "chatcmpl-google-1234567890",
+    "object": "chat.completion",
+    "created": 1234567890,
+    "model": "gemini-3-pro-preview",
+    "choices": [{
+        "index": 0,
+        "message": {"role": "assistant", "content": "Generated text"},
+        "finish_reason": "stop"
+    }],
+    "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "total_tokens": 30
+    }
+}
+```
+
+### Error Handling
+
+**Streaming Errors:**
+```python
+# CRITICAL: In streaming mode, NEVER raise HTTPException after response starts
+# Always yield SSE error events instead
+
+try:
+    async for chunk in stream:
+        yield chunk
+except Exception as e:
+    # ✅ Correct: Yield error as SSE event
+    error_data = {"error": {"type": "api_error", "message": str(e)}}
+    yield f"data: {json.dumps(error_data)}\n\n"
+
+    # ❌ Wrong: This crashes with "response already started"
+    # raise HTTPException(status_code=500, detail=str(e))
+```
+
+## Known Issues and Solutions
+
+### Issue 1: Streaming Appears "Dead" on Complex Requests
+
+**Symptom:** Simple requests work, but complex requests (e.g., "analyze this folder") hang.
+
+**Root Cause:** Google API returns chunks with `chunk.text = None` (metadata chunks).
+
+**Solution:**
+```python
+# ❌ Wrong: Crashes on None
+chunk_text = chunk.text if hasattr(chunk, "text") else ""
+len(chunk_text)  # TypeError if chunk.text is None
+
+# ✅ Correct: Handles None gracefully
+chunk_text = getattr(chunk, "text", None) or ""
+if chunk_text:  # Skip empty chunks
+    yield chunk_text
+```
+
+### Issue 2: OAuth2 Authentication Error
+
+**Symptom:** `401 API keys are not supported by this API`
+
+**Root Cause:** SDK defaults to OAuth2 for Vertex AI instead of API key auth.
+
+**Solution:**
+```python
+# Set environment variable BEFORE creating client
+os.environ['GOOGLE_CLOUD_API_KEY'] = api_key
+
+# Use vertexai=True with explicit api_key
+client = genai.Client(vertexai=True, api_key=api_key)
+```
+
+### Issue 3: Import Error for google-genai
+
+**Symptom:** `ImportError: cannot import name 'genai' from 'google'`
+
+**Root Cause:** Wrong import statement or package not installed.
+
+**Solution:**
+```python
+# ❌ Wrong (old package)
+import google.generativeai as genai
+
+# ✅ Correct (new package)
+from google import genai
+from google.genai import types
+```
+
+Install: `pip install google-genai>=1.0.0`
+
+### Issue 4: Buffering in Streaming
+
+**Symptom:** All chunks arrive at once instead of streaming in real-time.
+
+**Root Cause:** Collecting all chunks before yielding.
+
+**Solution:** Use queue + background thread pattern (see streaming implementation above).
+
+## Development History
+
+### Phase 1: Basic Proxy (Initial)
+- FastAPI server with OpenAI passthrough
+- Single provider support
+- Model mapping from Claude to OpenAI models
+
+### Phase 2: Multi-Provider Architecture
+- Per-tier provider configuration
+- Support for OpenAI, Azure, and compatible APIs
+- Custom headers per tier
+- Optional OPENAI_API_KEY with smart validation
+
+### Phase 3: Google GenAI Integration
+- Attempted REST API approach (complex endpoint logic)
+- Migrated to official `google-genai` SDK
+- Solved Vertex AI authentication issues
+- Implemented proper message/response conversion
+
+### Phase 4: Streaming Fixes
+- Fixed "response already started" error (yield SSE instead of raise)
+- Fixed buffering issue (queue + background thread)
+- Fixed None chunk.text handling
+- Added comprehensive debug logging
+
+### Current Status
+- ✅ Multi-provider support (OpenAI, Azure, Google)
+- ✅ Full streaming support with real-time chunks
+- ✅ Per-tier configuration
+- ✅ Request cancellation
+- ✅ Robust error handling
+- ✅ Google Gemini 3 Pro support via Vertex AI
+
+## API Endpoints
+
+### POST /v1/chat/completions
+
+**Request (OpenAI format):**
+```json
+{
+  "model": "claude-sonnet-4",
+  "messages": [
+    {"role": "system", "content": "You are helpful"},
+    {"role": "user", "content": "Hello"}
+  ],
+  "temperature": 1.0,
+  "max_tokens": 8192,
+  "stream": false
+}
+```
+
+**Response (OpenAI format):**
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "created": 1234567890,
+  "model": "gemini-3-pro-preview",
+  "choices": [{
+    "index": 0,
+    "message": {"role": "assistant", "content": "Hi there!"},
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 15,
+    "completion_tokens": 3,
+    "total_tokens": 18
+  }
+}
+```
+
+**Streaming Response (SSE format):**
+```
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1234567890,"model":"gemini-3-pro-preview","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1234567890,"model":"gemini-3-pro-preview","choices":[{"index":0,"delta":{"content":" there!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1234567890,"model":"gemini-3-pro-preview","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+## Dependencies
+
+```toml
+[project]
+dependencies = [
+    "fastapi[standard]>=0.115.11",  # Web framework
+    "uvicorn>=0.34.0",               # ASGI server
+    "pydantic>=2.0.0",               # Data validation
+    "python-dotenv>=1.0.0",          # Environment variables
+    "openai>=1.54.0",                # OpenAI client library
+    "httpx>=0.25.0",                 # Async HTTP client
+    "google-genai>=1.0.0",           # Google GenAI SDK
+]
+```
+
+## Running the Proxy
+
+```bash
+# Install dependencies
+pip install -e .
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Run server
+python -m src.main
+
+# Or using uvicorn directly
+uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+## Testing
+
+```bash
+# Simple test
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer your-auth-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4",
+    "messages": [{"role": "user", "content": "Hi"}],
+    "stream": false
+  }'
+
+# Streaming test
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer your-auth-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4",
+    "messages": [{"role": "user", "content": "Count to 10"}],
+    "stream": true
+  }'
+```
+
+## Future Enhancements
+
+Potential improvements:
+- Support for more providers (Anthropic native, Cohere, etc.)
+- Caching layer for repeated requests
+- Rate limiting and usage tracking
+- Model fallback/retry logic
+- Embedding API support
+- Function calling translation
+- Image/multimodal support for Google models
+- Health check endpoints
+- Metrics and monitoring
+
+## Contributing
+
+When working on this codebase:
+
+1. **Read files before editing** - Always use Read tool before Edit
+2. **Handle None values** - Google API can return `None` for chunk.text
+3. **Streaming errors** - Always yield SSE events, never raise HTTPException
+4. **Test both modes** - Verify streaming and non-streaming work
+5. **Environment variables** - Use tier-specific keys when available
+6. **Debug logging** - Use the comprehensive logging for troubleshooting
+
+## License
+
+MIT License - See LICENSE file for details
+
+## Support
+
+For issues related to:
+- **Claude Code**: https://github.com/anthropics/claude-code/issues
+- **This Proxy**: Create an issue in this repository
+- **Google GenAI SDK**: https://github.com/googleapis/python-genai
+
+---
+
+**Last Updated:** 2025-11-19
+**Version:** 1.0.0
+**Status:** Production Ready ✅
