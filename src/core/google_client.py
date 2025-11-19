@@ -133,13 +133,14 @@ class GoogleGenAIClient:
                 parts_info = []
                 if hasattr(content, 'parts'):
                     for part in content.parts:
-                        if hasattr(part, 'text'):
+                        # Check function_call/function_response FIRST (they may also have text attr)
+                        if hasattr(part, 'function_call') and part.function_call:
+                            parts_info.append(f"function_call({getattr(part.function_call, 'name', 'unknown')})")
+                        elif hasattr(part, 'function_response') and part.function_response:
+                            parts_info.append(f"function_response({getattr(part.function_response, 'name', 'unknown')})")
+                        elif hasattr(part, 'text'):
                             text_val = getattr(part, 'text', None) or ''
                             parts_info.append(f"text({len(text_val)}chars)")
-                        elif hasattr(part, 'function_call'):
-                            parts_info.append(f"function_call({getattr(part.function_call, 'name', 'unknown')})")
-                        elif hasattr(part, 'function_response'):
-                            parts_info.append(f"function_response({getattr(part.function_response, 'name', 'unknown')})")
                         else:
                             parts_info.append(f"unknown_part({type(part).__name__})")
                 logger.info(f"  Content[{idx}]: role={getattr(content, 'role', '?')}, parts=[{', '.join(parts_info)}]")
@@ -261,6 +262,11 @@ class GoogleGenAIClient:
                 # Tool result messages - convert to function_response
                 tool_call_id = msg.get("tool_call_id", "")
                 result_content = str(content) if content else ""
+
+                # Skip empty tool results - Google API may not accept them
+                if not result_content.strip():
+                    logger.warning(f"⚠️ Skipping tool result with empty content (tool_call_id={tool_call_id})")
+                    continue
 
                 # Look up function name from previous tool_call using tool_call_id
                 # OpenAI format doesn't include function name in tool response,
