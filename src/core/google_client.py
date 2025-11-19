@@ -244,10 +244,25 @@ class GoogleGenAIClient:
 
                             # Create FunctionCall part
                             try:
+                                logger.info(f"🔨 Creating FunctionCall Part:")
+                                logger.info(f"   name={func_name}")
+                                logger.info(f"   args type={type(args).__name__}")
+                                logger.info(f"   args keys={list(args.keys()) if isinstance(args, dict) else 'N/A'}")
+                                logger.info(f"   args={json.dumps(args, indent=2) if isinstance(args, dict) else args}")
+
                                 fc_part = types.Part.from_function_call(
                                     name=func_name,
                                     args=args
                                 )
+
+                                logger.info(f"🔨 FunctionCall Part created:")
+                                logger.info(f"   type={type(fc_part).__name__}")
+                                logger.info(f"   has function_call attr={hasattr(fc_part, 'function_call')}")
+                                if hasattr(fc_part, 'function_call'):
+                                    fc = fc_part.function_call
+                                    logger.info(f"   function_call.name={getattr(fc, 'name', 'N/A')}")
+                                    logger.info(f"   function_call.args={dict(getattr(fc, 'args', {}))}")
+
                                 parts.append(fc_part)
                                 logger.info(f"✅ Converted assistant tool_call '{func_name}' to Google function_call")
                             except Exception as e:
@@ -278,10 +293,28 @@ class GoogleGenAIClient:
 
                 # Create FunctionResponse part
                 try:
+                    response_obj = {"result": result_content}
+
+                    logger.info(f"🔨 Creating FunctionResponse Part:")
+                    logger.info(f"   name={func_name}")
+                    logger.info(f"   response type={type(response_obj).__name__}")
+                    logger.info(f"   response keys={list(response_obj.keys())}")
+                    logger.info(f"   result_content type={type(result_content).__name__}, length={len(result_content)}")
+                    logger.info(f"   response={json.dumps(response_obj, indent=2)[:500]}...")  # Truncate to 500 chars
+
                     fr_part = types.Part.from_function_response(
                         name=func_name,
-                        response={"result": result_content}
+                        response=response_obj
                     )
+
+                    logger.info(f"🔨 FunctionResponse Part created:")
+                    logger.info(f"   type={type(fr_part).__name__}")
+                    logger.info(f"   has function_response attr={hasattr(fr_part, 'function_response')}")
+                    if hasattr(fr_part, 'function_response'):
+                        fr = fr_part.function_response
+                        logger.info(f"   function_response.name={getattr(fr, 'name', 'N/A')}")
+                        logger.info(f"   function_response.response type={type(getattr(fr, 'response', None))}")
+
                     parts = [fr_part]
                     contents.append(types.Content(role="user", parts=parts))
                     logger.info(f"✅ Converted tool result for '{func_name}' to Google function_response")
