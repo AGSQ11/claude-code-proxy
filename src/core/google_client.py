@@ -177,52 +177,74 @@ class GoogleGenAIClient:
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
-            # Skip messages with tool calls or function calls (not supported in conversion)
-            if "tool_calls" in msg or "function_call" in msg:
-                logger.warning(f"⚠️ Skipping message with tool_calls/function_call - not supported by Google API")
-                continue
-
-            # Handle both string and list content (for multimodal messages)
-            if isinstance(content, list):
-                # Extract text from content parts, skip tool_use blocks
-                text_parts = []
-                for part in content:
-                    if isinstance(part, dict):
-                        # Skip tool_use, tool_result, function_call parts
-                        part_type = part.get("type", "")
-                        if part_type in ["tool_use", "tool_result", "function_call"]:
-                            logger.warning(f"⚠️ Skipping {part_type} content part - not supported by Google API")
-                            continue
-                        elif part_type == "text":
-                            text_parts.append(part.get("text", ""))
-                    elif isinstance(part, str):
-                        text_parts.append(part)
-                content_text = " ".join(text_parts) if text_parts else ""
-            else:
-                content_text = str(content) if content else ""
-
-            # Skip empty messages
-            if not content_text.strip():
-                logger.warning(f"⚠️ Skipping empty {role} message after filtering")
-                continue
-
             if role == "system":
                 # System messages become system instructions
-                system_instruction = [types.Part.from_text(text=content_text)]
+                content_text = str(content) if content else ""
+                if content_text.strip():
+                    system_instruction = [types.Part.from_text(text=content_text)]
+
             elif role == "user":
                 # User messages
-                contents.append(types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=content_text)]
-                ))
+                content_text = str(content) if content else ""
+                if content_text.strip():
+                    contents.append(types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=content_text)]
+                    ))
+
             elif role == "assistant":
-                # Assistant messages (model role in Google API)
-                contents.append(types.Content(
-                    role="model",
-                    parts=[types.Part.from_text(text=content_text)]
-                ))
+                # Assistant messages - may contain text, tool_calls, or both
+                parts = []
+
+                # Extract text content
+                content_text = str(content) if content else ""
+                if content_text.strip():
+                    parts.append(types.Part.from_text(text=content_text))
+
+                # Convert tool_calls to function_call parts
+                if "tool_calls" in msg and msg["tool_calls"]:
+                    for tool_call in msg["tool_calls"]:
+                        if tool_call.get("type") == "function":
+                            func = tool_call.get("function", {})
+                            # Parse arguments JSON string to dict
+                            args_str = func.get("arguments", "{}")
+                            try:
+                                args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                            except json.JSONDecodeError:
+                                logger.warning(f"⚠️ Failed to parse tool arguments: {args_str}")
+                                args = {}
+
+                            # Create FunctionCall part
+                            parts.append(types.Part.from_function_call(
+                                name=func.get("name", ""),
+                                args=args
+                            ))
+                            logger.info(f"✅ Converted assistant tool_call '{func.get('name')}' to Google function_call")
+
+                if parts:
+                    contents.append(types.Content(role="model", parts=parts))
+
+            elif role == "tool":
+                # Tool result messages - convert to function_response
+                tool_call_id = msg.get("tool_call_id", "")
+                result_content = str(content) if content else ""
+
+                # Extract function name from tool_call_id or use generic name
+                # OpenAI format doesn't include function name in tool response,
+                # but Google needs it. We'll need to track this from previous messages.
+                # For now, use a generic approach or extract from context
+                func_name = msg.get("name", "unknown_function")
+
+                # Create FunctionResponse part
+                parts = [types.Part.from_function_response(
+                    name=func_name,
+                    response={"result": result_content}
+                )]
+
+                contents.append(types.Content(role="user", parts=parts))
+                logger.info(f"✅ Converted tool result for '{func_name}' to Google function_response")
+
             else:
-                # Skip tool, function, or other unknown roles
                 logger.warning(f"⚠️ Skipping message with unknown role: {role}")
 
         # If no contents, add a default user message
