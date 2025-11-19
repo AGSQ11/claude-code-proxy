@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import traceback
 from typing import Optional, AsyncGenerator, Dict, Any
 
@@ -36,9 +37,15 @@ class GoogleGenAIClient:
         self.api_key = api_key
         self.timeout = timeout
 
-        # Create the genai client with API key
-        # IMPORTANT: vertexai=False ensures we use Gemini Developer API (supports API keys)
-        # instead of Vertex AI (requires OAuth2)
+        # Set API key as environment variable - the SDK reads from GEMINI_API_KEY or GOOGLE_API_KEY
+        # We set both the env var AND pass as parameter to ensure it's used
+        os.environ['GOOGLE_API_KEY'] = api_key
+        os.environ['GEMINI_API_KEY'] = api_key
+
+        # Create the genai client
+        # IMPORTANT: Pass both api_key parameter AND vertexai=False
+        # - vertexai=False ensures we use Developer API endpoint (generativelanguage.googleapis.com)
+        # - api_key parameter ensures API key authentication is used (not OAuth2)
         self.client = genai.Client(api_key=api_key, vertexai=False)
 
         self.active_requests: Dict[str, asyncio.Event] = {}
