@@ -282,9 +282,20 @@ class GoogleGenAIClient:
                                     args=args
                                 )
 
+                                # CRITICAL: Gemini 3 Pro requires thought_signature for function calls
+                                # Use bypass string for function calls not originally from Gemini 3
+                                # See: https://ai.google.dev/gemini-api/docs/thought-signatures
+                                try:
+                                    fc_part.thought_signature = "context_engineering_is_the_way_to_go"
+                                    logger.info(f"✅ Added bypass thought_signature to function_call part")
+                                except AttributeError:
+                                    # If thought_signature isn't a settable attribute, log warning
+                                    logger.warning(f"⚠️ Could not set thought_signature attribute on Part")
+
                                 logger.info(f"🔨 FunctionCall Part created:")
                                 logger.info(f"   type={type(fc_part).__name__}")
                                 logger.info(f"   has function_call attr={hasattr(fc_part, 'function_call')}")
+                                logger.info(f"   has thought_signature attr={hasattr(fc_part, 'thought_signature')}")
                                 if hasattr(fc_part, 'function_call'):
                                     fc = fc_part.function_call
                                     logger.info(f"   function_call.name={getattr(fc, 'name', 'N/A')}")
