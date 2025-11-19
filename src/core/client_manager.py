@@ -15,13 +15,14 @@ class ClientManager:
     def __init__(self):
         """Initialize clients for each model tier based on provider type."""
         self.clients: Dict[str, Union[OpenAIClient, "GoogleGenAIClient"]] = {}
+        self.client_types: Dict[str, str] = {}  # Track client type for logging
 
         print("\n🔧 Initializing API clients:")
 
         # Create client for BIG model
         print(f"\n📊 BIG model: {config.big_model}")
         print(f"   Provider: {config.big_model_provider}")
-        self.clients['big'] = self._create_client(
+        self.clients['big'], self.client_types['big'] = self._create_client(
             tier='BIG',
             provider=config.big_model_provider,
             api_key=config.big_model_api_key,
@@ -32,7 +33,7 @@ class ClientManager:
         # Create client for MIDDLE model
         print(f"\n📊 MIDDLE model: {config.middle_model}")
         print(f"   Provider: {config.middle_model_provider}")
-        self.clients['middle'] = self._create_client(
+        self.clients['middle'], self.client_types['middle'] = self._create_client(
             tier='MIDDLE',
             provider=config.middle_model_provider,
             api_key=config.middle_model_api_key,
@@ -43,7 +44,7 @@ class ClientManager:
         # Create client for SMALL model
         print(f"\n📊 SMALL model: {config.small_model}")
         print(f"   Provider: {config.small_model_provider}")
-        self.clients['small'] = self._create_client(
+        self.clients['small'], self.client_types['small'] = self._create_client(
             tier='SMALL',
             provider=config.small_model_provider,
             api_key=config.small_model_api_key,
@@ -59,7 +60,7 @@ class ClientManager:
         api_key: str,
         base_url: str,
         azure_api_version: str = None,
-    ) -> Union[OpenAIClient, "GoogleGenAIClient"]:
+    ) -> tuple[Union[OpenAIClient, "GoogleGenAIClient"], str]:
         """Create appropriate client based on provider type.
 
         Args:
@@ -70,7 +71,7 @@ class ClientManager:
             azure_api_version: Azure API version (only for OpenAI)
 
         Returns:
-            OpenAIClient or GoogleGenAIClient instance
+            Tuple of (client instance, client type string)
         """
         provider = provider.lower()
 
@@ -82,7 +83,7 @@ class ClientManager:
                 return GoogleGenAIClient(
                     api_key=api_key,
                     timeout=config.request_timeout,
-                )
+                ), "google"
             except ImportError as e:
                 print(f"   ❌ Error: Google Generative AI package not installed")
                 print(f"      Install with: pip install google-generativeai")
@@ -100,7 +101,7 @@ class ClientManager:
                 timeout=config.request_timeout,
                 api_version=azure_api_version,
                 custom_headers=config.get_custom_headers(tier),
-            )
+            ), "openai"
 
     def get_client_for_model(self, model_name: str) -> Union[OpenAIClient, "GoogleGenAIClient"]:
         """Get the appropriate client for a given model name.
@@ -109,18 +110,29 @@ class ClientManager:
             model_name: The OpenAI model name (already mapped from Claude model)
 
         Returns:
-            The appropriate OpenAIClient instance
+            The appropriate OpenAIClient or GoogleGenAIClient instance
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Determine which tier this model belongs to
         if model_name == config.big_model:
-            return self.clients['big']
+            tier = 'big'
+            logger.info(f"🎯 Model '{model_name}' -> BIG tier -> {self.client_types[tier]} client")
+            return self.clients[tier]
         elif model_name == config.middle_model:
-            return self.clients['middle']
+            tier = 'middle'
+            logger.info(f"🎯 Model '{model_name}' -> MIDDLE tier -> {self.client_types[tier]} client")
+            return self.clients[tier]
         elif model_name == config.small_model:
-            return self.clients['small']
+            tier = 'small'
+            logger.info(f"🎯 Model '{model_name}' -> SMALL tier -> {self.client_types[tier]} client")
+            return self.clients[tier]
         else:
             # Default to big model client for unknown models
-            return self.clients['big']
+            tier = 'big'
+            logger.warning(f"⚠️  Unknown model '{model_name}' -> defaulting to BIG tier ({config.big_model}) -> {self.client_types[tier]} client")
+            return self.clients[tier]
 
 
 # Global client manager instance
