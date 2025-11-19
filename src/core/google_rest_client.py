@@ -25,7 +25,12 @@ class GoogleRestClient:
         """
         self.api_key = api_key
         self.timeout = timeout
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
+
+        # Two different API endpoints:
+        # 1. Developer API (most models): generativelanguage.googleapis.com/v1beta
+        # 2. AI Platform API (newer models like gemini-3-pro): aiplatform.googleapis.com/v1/publishers/google
+        self.dev_api_base = "https://generativelanguage.googleapis.com/v1beta"
+        self.platform_api_base = "https://aiplatform.googleapis.com/v1/publishers/google"
 
         # Create HTTP client
         self.http_client = httpx.AsyncClient(
@@ -36,6 +41,31 @@ class GoogleRestClient:
         )
 
         self.active_requests: Dict[str, asyncio.Event] = {}
+
+    def _get_api_url(self, model: str, endpoint: str) -> str:
+        """Get the correct API URL based on model name.
+
+        Args:
+            model: Model name (e.g., "gemini-3-pro-preview", "gemini-2.5-flash")
+            endpoint: Endpoint type ("generateContent" or "streamGenerateContent")
+
+        Returns:
+            Full API URL with key parameter
+        """
+        # Gemini 3 models use the AI Platform API endpoint
+        if model.startswith("gemini-3"):
+            url = f"{self.platform_api_base}/models/{model}:{endpoint}"
+        else:
+            # Other models use the Developer API endpoint
+            url = f"{self.dev_api_base}/models/{model}:{endpoint}"
+
+        # Add API key and alt=sse for streaming
+        if "stream" in endpoint.lower():
+            url += f"?alt=sse&key={self.api_key}"
+        else:
+            url += f"?key={self.api_key}"
+
+        return url
 
     async def create_chat_completion(
         self, request: Dict[str, Any], request_id: Optional[str] = None
@@ -70,10 +100,10 @@ class GoogleRestClient:
                 }
             }
 
-            # Call Google REST API
-            url = f"{self.base_url}/models/{model}:generateContent?key={self.api_key}"
+            # Get the correct API URL for this model
+            url = self._get_api_url(model, "generateContent")
 
-            logger.info(f"Calling Google REST API: {model}")
+            logger.info(f"Calling Google REST API: {model} at {url.split('?')[0]}")
             response = await self.http_client.post(url, json=body)
             response.raise_for_status()
 
@@ -131,10 +161,10 @@ class GoogleRestClient:
                 }
             }
 
-            # Call Google REST API with streaming
-            url = f"{self.base_url}/models/{model}:streamGenerateContent?alt=sse&key={self.api_key}"
+            # Get the correct API URL for this model
+            url = self._get_api_url(model, "streamGenerateContent")
 
-            logger.info(f"Calling Google REST API (streaming): {model}")
+            logger.info(f"Calling Google REST API (streaming): {model} at {url.split('?')[0]}")
 
             chunk_id = f"chatcmpl-google-{int(asyncio.get_event_loop().time())}"
 
