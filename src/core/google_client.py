@@ -395,6 +395,12 @@ class GoogleGenAIClient:
                 logger.warning(f"⚠️ Empty response - no candidates in response")
 
         # Build OpenAI-format response
+        # Extract usage metadata (it's a Pydantic object, not a dict)
+        usage_metadata = getattr(response, "usage_metadata", None)
+        prompt_tokens = getattr(usage_metadata, "prompt_token_count", 0) if usage_metadata else 0
+        completion_tokens = getattr(usage_metadata, "candidates_token_count", 0) if usage_metadata else 0
+        total_tokens = getattr(usage_metadata, "total_token_count", 0) if usage_metadata else 0
+
         return {
             "id": f"chatcmpl-google-{int(asyncio.get_event_loop().time())}",
             "object": "chat.completion",
@@ -408,21 +414,9 @@ class GoogleGenAIClient:
                 }
             ],
             "usage": {
-                "prompt_tokens": getattr(
-                    response, "usage_metadata", {}
-                ).get("prompt_token_count", 0)
-                if hasattr(response, "usage_metadata")
-                else 0,
-                "completion_tokens": getattr(
-                    response, "usage_metadata", {}
-                ).get("candidates_token_count", 0)
-                if hasattr(response, "usage_metadata")
-                else 0,
-                "total_tokens": getattr(response, "usage_metadata", {}).get(
-                    "total_token_count", 0
-                )
-                if hasattr(response, "usage_metadata")
-                else 0,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
             },
         }
 
