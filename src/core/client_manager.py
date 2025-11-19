@@ -1,45 +1,83 @@
-"""Client Manager for handling multiple OpenAI providers per model tier."""
+"""Client Manager for handling multiple API providers per model tier."""
 
-from typing import Dict
+from typing import Dict, Union
 from src.core.client import OpenAIClient
+from src.core.google_client import GoogleGenAIClient
 from src.core.config import config
 
 
 class ClientManager:
-    """Manages multiple OpenAI clients, one per model tier (big/middle/small)."""
+    """Manages multiple API clients (OpenAI/Google), one per model tier (big/middle/small)."""
 
     def __init__(self):
-        """Initialize clients for each model tier."""
-        self.clients: Dict[str, OpenAIClient] = {}
+        """Initialize clients for each model tier based on provider type."""
+        self.clients: Dict[str, Union[OpenAIClient, GoogleGenAIClient]] = {}
 
         # Create client for BIG model
-        self.clients['big'] = OpenAIClient(
+        self.clients['big'] = self._create_client(
+            tier='BIG',
+            provider=config.big_model_provider,
             api_key=config.big_model_api_key,
             base_url=config.big_model_base_url,
-            timeout=config.request_timeout,
-            api_version=config.big_model_azure_api_version,
-            custom_headers=config.get_custom_headers('BIG'),
+            azure_api_version=config.big_model_azure_api_version,
         )
 
         # Create client for MIDDLE model
-        self.clients['middle'] = OpenAIClient(
+        self.clients['middle'] = self._create_client(
+            tier='MIDDLE',
+            provider=config.middle_model_provider,
             api_key=config.middle_model_api_key,
             base_url=config.middle_model_base_url,
-            timeout=config.request_timeout,
-            api_version=config.middle_model_azure_api_version,
-            custom_headers=config.get_custom_headers('MIDDLE'),
+            azure_api_version=config.middle_model_azure_api_version,
         )
 
         # Create client for SMALL model
-        self.clients['small'] = OpenAIClient(
+        self.clients['small'] = self._create_client(
+            tier='SMALL',
+            provider=config.small_model_provider,
             api_key=config.small_model_api_key,
             base_url=config.small_model_base_url,
-            timeout=config.request_timeout,
-            api_version=config.small_model_azure_api_version,
-            custom_headers=config.get_custom_headers('SMALL'),
+            azure_api_version=config.small_model_azure_api_version,
         )
 
-    def get_client_for_model(self, model_name: str) -> OpenAIClient:
+    def _create_client(
+        self,
+        tier: str,
+        provider: str,
+        api_key: str,
+        base_url: str,
+        azure_api_version: str = None,
+    ) -> Union[OpenAIClient, GoogleGenAIClient]:
+        """Create appropriate client based on provider type.
+
+        Args:
+            tier: Model tier name (BIG/MIDDLE/SMALL)
+            provider: Provider type ('openai' or 'google')
+            api_key: API key
+            base_url: Base URL (only for OpenAI)
+            azure_api_version: Azure API version (only for OpenAI)
+
+        Returns:
+            OpenAIClient or GoogleGenAIClient instance
+        """
+        provider = provider.lower()
+
+        if provider == "google":
+            print(f"   {tier} model using Google Generative AI")
+            return GoogleGenAIClient(
+                api_key=api_key,
+                timeout=config.request_timeout,
+            )
+        else:  # Default to OpenAI
+            return OpenAIClient(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=config.request_timeout,
+                api_version=azure_api_version,
+                custom_headers=config.get_custom_headers(tier),
+            )
+
+    def get_client_for_model(self, model_name: str) -> Union[OpenAIClient, GoogleGenAIClient]:
         """Get the appropriate client for a given model name.
 
         Args:

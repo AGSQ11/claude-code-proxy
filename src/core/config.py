@@ -50,16 +50,19 @@ class Config:
 
         # Per-model provider settings (with fallback to global settings)
         # BIG model provider settings
+        self.big_model_provider = os.environ.get("BIG_MODEL_PROVIDER", "openai")  # "openai" or "google"
         self.big_model_api_key = os.environ.get("BIG_MODEL_API_KEY", self.openai_api_key)
         self.big_model_base_url = os.environ.get("BIG_MODEL_BASE_URL", self.openai_base_url)
         self.big_model_azure_api_version = os.environ.get("BIG_MODEL_AZURE_API_VERSION", self.azure_api_version)
 
         # MIDDLE model provider settings
+        self.middle_model_provider = os.environ.get("MIDDLE_MODEL_PROVIDER", "openai")  # "openai" or "google"
         self.middle_model_api_key = os.environ.get("MIDDLE_MODEL_API_KEY", self.openai_api_key)
         self.middle_model_base_url = os.environ.get("MIDDLE_MODEL_BASE_URL", self.openai_base_url)
         self.middle_model_azure_api_version = os.environ.get("MIDDLE_MODEL_AZURE_API_VERSION", self.azure_api_version)
 
         # SMALL model provider settings
+        self.small_model_provider = os.environ.get("SMALL_MODEL_PROVIDER", "openai")  # "openai" or "google"
         self.small_model_api_key = os.environ.get("SMALL_MODEL_API_KEY", self.openai_api_key)
         self.small_model_base_url = os.environ.get("SMALL_MODEL_BASE_URL", self.openai_base_url)
         self.small_model_azure_api_version = os.environ.get("SMALL_MODEL_AZURE_API_VERSION", self.azure_api_version)
