@@ -17,6 +17,11 @@ def convert_claude_to_openai(
     # Map model
     openai_model = model_manager.map_claude_model_to_openai(claude_request.model)
 
+    # Check if we're using Gemini 3 Pro (needs thought_signature bypass)
+    is_gemini_3_pro = "gemini-3-pro" in openai_model.lower()
+    if is_gemini_3_pro:
+        logger.info(f"🔍 Detected Gemini 3 Pro model - will add thought_signature bypass to tool_calls")
+
     # Convert messages
     openai_messages = []
 
@@ -51,7 +56,7 @@ def convert_claude_to_openai(
             openai_message = convert_claude_user_message(msg)
             openai_messages.append(openai_message)
         elif msg.role == Constants.ROLE_ASSISTANT:
-            openai_message = convert_claude_assistant_message(msg)
+            openai_message = convert_claude_assistant_message(msg, is_gemini_3_pro)
             openai_messages.append(openai_message)
 
             # Check if next message contains tool results
@@ -165,14 +170,19 @@ def convert_claude_user_message(msg: ClaudeMessage) -> Dict[str, Any]:
         return {"role": Constants.ROLE_USER, "content": openai_content}
 
 
-def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
-    """Convert Claude assistant message to OpenAI format."""
+def convert_claude_assistant_message(msg: ClaudeMessage, is_gemini_3_pro: bool = False) -> Dict[str, Any]:
+    """Convert Claude assistant message to OpenAI format.
+
+    Args:
+        msg: Claude message to convert
+        is_gemini_3_pro: Whether the target model is Gemini 3 Pro (requires thought_signature)
+    """
     text_parts = []
     tool_calls = []
 
     if msg.content is None:
         return {"role": Constants.ROLE_ASSISTANT, "content": None}
-    
+
     if isinstance(msg.content, str):
         return {"role": Constants.ROLE_ASSISTANT, "content": msg.content}
 
@@ -180,16 +190,23 @@ def convert_claude_assistant_message(msg: ClaudeMessage) -> Dict[str, Any]:
         if block.type == Constants.CONTENT_TEXT:
             text_parts.append(block.text)
         elif block.type == Constants.CONTENT_TOOL_USE:
-            tool_calls.append(
-                {
-                    "id": block.id,
-                    "type": Constants.TOOL_FUNCTION,
-                    Constants.TOOL_FUNCTION: {
-                        "name": block.name,
-                        "arguments": json.dumps(block.input, ensure_ascii=False),
-                    },
-                }
-            )
+            tool_call = {
+                "id": block.id,
+                "type": Constants.TOOL_FUNCTION,
+                Constants.TOOL_FUNCTION: {
+                    "name": block.name,
+                    "arguments": json.dumps(block.input, ensure_ascii=False),
+                },
+            }
+
+            # CRITICAL: Gemini 3 Pro requires thought_signature for function calls
+            # Add bypass signature for Google's OpenAI-compatible endpoint
+            # Reference: https://ai.google.dev/gemini-api/docs/thought-signatures
+            if is_gemini_3_pro:
+                tool_call["thought_signature"] = "context_engineering_is_the_way_to_go"
+                logger.debug(f"Added thought_signature bypass to tool_call '{block.name}'")
+
+            tool_calls.append(tool_call)
 
     openai_message = {"role": Constants.ROLE_ASSISTANT}
 
