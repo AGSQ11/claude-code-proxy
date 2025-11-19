@@ -11,8 +11,10 @@ from fastapi import HTTPException
 
 try:
     from google import genai
+    from google.genai import types
 except ImportError:
     genai = None  # Will be checked when creating client
+    types = None
 
 
 logger = logging.getLogger(__name__)
@@ -37,16 +39,15 @@ class GoogleGenAIClient:
         self.api_key = api_key
         self.timeout = timeout
 
-        # Set API key as environment variable - the SDK reads from GEMINI_API_KEY or GOOGLE_API_KEY
-        # We set both the env var AND pass as parameter to ensure it's used
-        os.environ['GOOGLE_API_KEY'] = api_key
-        os.environ['GEMINI_API_KEY'] = api_key
+        # Set API key as GOOGLE_CLOUD_API_KEY environment variable (required for Vertex AI)
+        os.environ['GOOGLE_CLOUD_API_KEY'] = api_key
 
-        # Create the genai client
-        # IMPORTANT: Pass both api_key parameter AND vertexai=False
-        # - vertexai=False ensures we use Developer API endpoint (generativelanguage.googleapis.com)
-        # - api_key parameter ensures API key authentication is used (not OAuth2)
-        self.client = genai.Client(api_key=api_key, vertexai=False)
+        # Create the genai client with Vertex AI enabled
+        # IMPORTANT: vertexai=True is required for models like gemini-3-pro-preview
+        self.client = genai.Client(
+            vertexai=True,
+            api_key=api_key
+        )
 
         self.active_requests: Dict[str, asyncio.Event] = {}
 
@@ -71,14 +72,16 @@ class GoogleGenAIClient:
             model = request.get("model", "gemini-2.0-flash-exp")
             messages = request.get("messages", [])
 
-            # Build contents from messages
-            contents = self._convert_messages_to_contents(messages)
+            # Build contents and config from messages
+            contents, system_instruction = self._convert_messages_to_contents(messages)
+            config = self._build_config(request, system_instruction)
 
             # Call Google API (blocking, so run in thread pool)
             response = await asyncio.to_thread(
                 self.client.models.generate_content,
                 model=model,
                 contents=contents,
+                config=config,
             )
 
             # Convert response to OpenAI format
@@ -119,14 +122,16 @@ class GoogleGenAIClient:
             model = request.get("model", "gemini-2.0-flash-exp")
             messages = request.get("messages", [])
 
-            # Build contents from messages
-            contents = self._convert_messages_to_contents(messages)
+            # Build contents and config from messages
+            contents, system_instruction = self._convert_messages_to_contents(messages)
+            config = self._build_config(request, system_instruction)
 
             # Stream from Google API (blocking, so run in thread pool)
             def _generate_stream():
                 return self.client.models.generate_content_stream(
                     model=model,
                     contents=contents,
+                    config=config,
                 )
 
             stream = await asyncio.to_thread(_generate_stream)
@@ -148,18 +153,17 @@ class GoogleGenAIClient:
             if request_id and request_id in self.active_requests:
                 del self.active_requests[request_id]
 
-    def _convert_messages_to_contents(self, messages: list) -> list:
+    def _convert_messages_to_contents(self, messages: list) -> tuple[list, Optional[list]]:
         """Convert OpenAI messages to Google contents format.
 
         Args:
             messages: List of OpenAI-format messages
 
         Returns:
-            List of content strings for Google API
+            Tuple of (contents list, system_instruction list)
         """
-        # For simplicity, combine all messages into a single prompt
-        # Google's genai SDK handles multi-turn differently, but this works for basic use
-        content_parts = []
+        contents = []
+        system_instruction = None
 
         for msg in messages:
             role = msg.get("role", "user")
@@ -180,15 +184,57 @@ class GoogleGenAIClient:
                 content_text = str(content)
 
             if role == "system":
-                content_parts.append(f"System: {content_text}")
+                # System messages become system instructions
+                system_instruction = [types.Part.from_text(text=content_text)]
             elif role == "user":
-                content_parts.append(content_text)
+                # User messages
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=content_text)]
+                ))
             elif role == "assistant":
-                content_parts.append(f"Assistant: {content_text}")
+                # Assistant messages (model role in Google API)
+                contents.append(types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text=content_text)]
+                ))
 
-        combined = "\n\n".join(content_parts) if content_parts else "Hello"
-        # Return as list of strings (Google API expects list)
-        return [combined]
+        # If no contents, add a default user message
+        if not contents:
+            contents.append(types.Content(
+                role="user",
+                parts=[types.Part.from_text(text="Hello")]
+            ))
+
+        return contents, system_instruction
+
+    def _build_config(self, request: Dict[str, Any], system_instruction: Optional[list]) -> Any:
+        """Build GenerateContentConfig from request parameters.
+
+        Args:
+            request: OpenAI-format request dict
+            system_instruction: Optional system instruction parts
+
+        Returns:
+            GenerateContentConfig object
+        """
+        config_params = {
+            "temperature": request.get("temperature", 1.0),
+            "top_p": request.get("top_p", 0.95),
+            "max_output_tokens": request.get("max_tokens", 8192),
+            "safety_settings": [
+                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
+                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"),
+                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"),
+                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
+            ],
+        }
+
+        # Add system instruction if present
+        if system_instruction:
+            config_params["system_instruction"] = system_instruction
+
+        return types.GenerateContentConfig(**config_params)
 
     def _convert_response_to_openai(
         self, response: Any, original_request: Dict[str, Any]

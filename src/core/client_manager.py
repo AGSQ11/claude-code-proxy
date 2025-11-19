@@ -4,9 +4,9 @@ from typing import Dict, Union, TYPE_CHECKING
 from src.core.client import OpenAIClient
 from src.core.config import config
 
-# Lazy import for Google REST client to avoid requiring it when not used
+# Lazy import for Google GenAI client to avoid requiring it when not used
 if TYPE_CHECKING:
-    from src.core.google_rest_client import GoogleRestClient
+    from src.core.google_client import GoogleGenAIClient
 
 
 class ClientManager:
@@ -14,7 +14,7 @@ class ClientManager:
 
     def __init__(self):
         """Initialize clients for each model tier based on provider type."""
-        self.clients: Dict[str, Union[OpenAIClient, "GoogleRestClient"]] = {}
+        self.clients: Dict[str, Union[OpenAIClient, "GoogleGenAIClient"]] = {}
         self.client_types: Dict[str, str] = {}  # Track client type for logging
 
         print("\n🔧 Initializing API clients:")
@@ -60,7 +60,7 @@ class ClientManager:
         api_key: str,
         base_url: str,
         azure_api_version: str = None,
-    ) -> tuple[Union[OpenAIClient, "GoogleRestClient"], str]:
+    ) -> tuple[Union[OpenAIClient, "GoogleGenAIClient"], str]:
         """Create appropriate client based on provider type.
 
         Args:
@@ -76,13 +76,22 @@ class ClientManager:
         provider = provider.lower()
 
         if provider == "google":
-            # Use direct REST API client for Google (no SDK dependencies)
-            from src.core.google_rest_client import GoogleRestClient
-            print(f"   ✅ Using Google Generative AI (REST API)")
-            return GoogleRestClient(
-                api_key=api_key,
-                timeout=config.request_timeout,
-            ), "google"
+            # Use Google GenAI SDK client
+            try:
+                from src.core.google_client import GoogleGenAIClient
+                print(f"   ✅ Using Google Generative AI (SDK)")
+                return GoogleGenAIClient(
+                    api_key=api_key,
+                    timeout=config.request_timeout,
+                ), "google"
+            except ImportError as e:
+                print(f"   ❌ Error: Google Generative AI package not installed")
+                print(f"      Install with: pip install google-genai")
+                print(f"      Or run: uv pip install google-genai")
+                raise ImportError(
+                    f"google-genai package is required for provider='google'. "
+                    f"Install with: pip install google-genai"
+                ) from e
         else:  # Default to OpenAI
             print(f"   ✅ Using OpenAI-compatible API")
             print(f"      Base URL: {base_url}")
@@ -94,14 +103,14 @@ class ClientManager:
                 custom_headers=config.get_custom_headers(tier),
             ), "openai"
 
-    def get_client_for_model(self, model_name: str) -> Union[OpenAIClient, "GoogleRestClient"]:
+    def get_client_for_model(self, model_name: str) -> Union[OpenAIClient, "GoogleGenAIClient"]:
         """Get the appropriate client for a given model name.
 
         Args:
             model_name: The OpenAI model name (already mapped from Claude model)
 
         Returns:
-            The appropriate OpenAIClient or GoogleRestClient instance
+            The appropriate OpenAIClient or GoogleGenAIClient instance
         """
         import logging
         logger = logging.getLogger(__name__)
