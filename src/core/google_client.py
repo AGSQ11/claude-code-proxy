@@ -159,12 +159,26 @@ class GoogleGenAIClient:
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
+            # Handle both string and list content (for multimodal messages)
+            if isinstance(content, list):
+                # Extract text from content parts
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                content_text = " ".join(text_parts)
+            else:
+                content_text = str(content)
+
             if role == "system":
-                content_parts.append(f"System: {content}")
+                content_parts.append(f"System: {content_text}")
             elif role == "user":
-                content_parts.append(content)
+                content_parts.append(content_text)
             elif role == "assistant":
-                content_parts.append(f"Assistant: {content}")
+                content_parts.append(f"Assistant: {content_text}")
 
         return "\n\n".join(content_parts) if content_parts else "Hello"
 
