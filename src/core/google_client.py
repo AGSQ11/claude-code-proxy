@@ -335,20 +335,10 @@ class GoogleGenAIClient:
                 config_params["tools"] = [google_tools]
                 logger.info(f"✅ Added {len(request['tools'])} tools to config")
 
-        # Note: tool_choice and parallel_tool_calls handled differently in Google API
-        # Google uses automatic_function_calling config instead
-        if "tool_choice" in request:
-            tool_choice = request["tool_choice"]
-            if tool_choice == "none":
-                # Disable automatic function calling
+                # IMPORTANT: Disable automatic function calling so Claude Code handles execution
+                # Google's automatic execution won't work because tool implementations are in Claude Code
                 config_params["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=True)
-                logger.info("🔧 Disabled automatic function calling (tool_choice=none)")
-            elif tool_choice == "auto":
-                # Enable automatic function calling (default behavior)
-                logger.info("🔧 Using automatic function calling (tool_choice=auto)")
-            # "required" and specific function forcing not directly supported, log warning
-            elif isinstance(tool_choice, dict):
-                logger.warning(f"⚠️ Specific tool_choice not supported, using automatic function calling")
+                logger.info("🔧 Disabled automatic function calling (Claude Code will execute tools)")
 
         # Add system instruction if present
         if system_instruction:
