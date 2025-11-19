@@ -177,19 +177,34 @@ class GoogleGenAIClient:
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
+            # Skip messages with tool calls or function calls (not supported in conversion)
+            if "tool_calls" in msg or "function_call" in msg:
+                logger.warning(f"⚠️ Skipping message with tool_calls/function_call - not supported by Google API")
+                continue
+
             # Handle both string and list content (for multimodal messages)
             if isinstance(content, list):
-                # Extract text from content parts
+                # Extract text from content parts, skip tool_use blocks
                 text_parts = []
                 for part in content:
                     if isinstance(part, dict):
-                        if part.get("type") == "text":
+                        # Skip tool_use, tool_result, function_call parts
+                        part_type = part.get("type", "")
+                        if part_type in ["tool_use", "tool_result", "function_call"]:
+                            logger.warning(f"⚠️ Skipping {part_type} content part - not supported by Google API")
+                            continue
+                        elif part_type == "text":
                             text_parts.append(part.get("text", ""))
                     elif isinstance(part, str):
                         text_parts.append(part)
-                content_text = " ".join(text_parts)
+                content_text = " ".join(text_parts) if text_parts else ""
             else:
-                content_text = str(content)
+                content_text = str(content) if content else ""
+
+            # Skip empty messages
+            if not content_text.strip():
+                logger.warning(f"⚠️ Skipping empty {role} message after filtering")
+                continue
 
             if role == "system":
                 # System messages become system instructions
@@ -206,9 +221,13 @@ class GoogleGenAIClient:
                     role="model",
                     parts=[types.Part.from_text(text=content_text)]
                 ))
+            else:
+                # Skip tool, function, or other unknown roles
+                logger.warning(f"⚠️ Skipping message with unknown role: {role}")
 
         # If no contents, add a default user message
         if not contents:
+            logger.warning(f"⚠️ No valid contents after filtering, adding default message")
             contents.append(types.Content(
                 role="user",
                 parts=[types.Part.from_text(text="Hello")]
@@ -226,6 +245,14 @@ class GoogleGenAIClient:
         Returns:
             GenerateContentConfig object
         """
+        # Log and ignore tool-related parameters that aren't supported
+        if "tools" in request:
+            logger.warning(f"⚠️ Ignoring 'tools' parameter - function calling not supported for Google API")
+        if "tool_choice" in request:
+            logger.warning(f"⚠️ Ignoring 'tool_choice' parameter - function calling not supported for Google API")
+        if "parallel_tool_calls" in request:
+            logger.warning(f"⚠️ Ignoring 'parallel_tool_calls' parameter - function calling not supported for Google API")
+
         config_params = {
             "temperature": request.get("temperature", 1.0),
             "top_p": request.get("top_p", 0.95),
