@@ -298,20 +298,42 @@ class GoogleGenAIClient:
         """
         chunk_id = f"chatcmpl-google-{int(asyncio.get_event_loop().time())}"
 
-        # Iterate through the stream (which is a blocking generator)
-        # We need to run this in a thread pool to avoid blocking
-        def _iterate_stream():
-            chunks = []
+        # Iterate through the stream and yield chunks in real-time
+        # Use a queue to stream from blocking generator without waiting for all chunks
+        import queue
+        import threading
+
+        chunk_queue = queue.Queue()
+        error_holder = [None]
+
+        def _stream_reader():
+            """Read from blocking stream and put chunks in queue"""
             try:
                 for chunk in stream:
-                    chunks.append(chunk)
+                    chunk_queue.put(("chunk", chunk))
+                chunk_queue.put(("done", None))
             except Exception as e:
-                logger.error(f"Error iterating stream: {e}")
-            return chunks
+                error_holder[0] = e
+                chunk_queue.put(("error", str(e)))
 
-        chunks = await asyncio.to_thread(_iterate_stream)
+        # Start background thread to read stream
+        reader_thread = threading.Thread(target=_stream_reader, daemon=True)
+        reader_thread.start()
 
-        for chunk in chunks:
+        # Yield chunks as they arrive
+        while True:
+            # Get next item from queue (blocks until available)
+            item_type, item_data = await asyncio.to_thread(chunk_queue.get)
+
+            if item_type == "error":
+                logger.error(f"Error in stream: {item_data}")
+                break
+            elif item_type == "done":
+                break
+            elif item_type != "chunk":
+                continue
+
+            chunk = item_data
             # Check for cancellation
             if (
                 request_id

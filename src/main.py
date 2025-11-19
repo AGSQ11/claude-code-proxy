@@ -45,11 +45,20 @@ def main():
     print(f"")
     print(f"📋 Model Configuration:")
     print(f"   Big Model (opus):   {config.big_model}")
-    print(f"   └─ Provider: {config.big_model_base_url}")
+    if config.big_model_provider.lower() == "google":
+        print(f"   └─ Provider: Google Generative AI (SDK)")
+    else:
+        print(f"   └─ Provider: {config.big_model_base_url}")
     print(f"   Middle Model (sonnet): {config.middle_model}")
-    print(f"   └─ Provider: {config.middle_model_base_url}")
+    if config.middle_model_provider.lower() == "google":
+        print(f"   └─ Provider: Google Generative AI (SDK)")
+    else:
+        print(f"   └─ Provider: {config.middle_model_base_url}")
     print(f"   Small Model (haiku):  {config.small_model}")
-    print(f"   └─ Provider: {config.small_model_base_url}")
+    if config.small_model_provider.lower() == "google":
+        print(f"   └─ Provider: Google Generative AI (SDK)")
+    else:
+        print(f"   └─ Provider: {config.small_model_base_url}")
     print(f"")
     print(f"⚙️  Server Configuration:")
     print(f"   Max Tokens Limit: {config.max_tokens_limit}")
