@@ -286,8 +286,9 @@ class GoogleGenAIClient:
                                 # Use bypass string for function calls not originally from Gemini 3
                                 # See: https://ai.google.dev/gemini-api/docs/thought-signatures
                                 try:
-                                    fc_part.thought_signature = "context_engineering_is_the_way_to_go"
-                                    logger.info(f"✅ Added bypass thought_signature to function_call part")
+                                    # thought_signature expects bytes, not str
+                                    fc_part.thought_signature = b"context_engineering_is_the_way_to_go"
+                                    logger.info(f"✅ Added bypass thought_signature (bytes) to function_call part")
                                 except AttributeError:
                                     # If thought_signature isn't a settable attribute, log warning
                                     logger.warning(f"⚠️ Could not set thought_signature attribute on Part")
