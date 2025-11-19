@@ -121,22 +121,30 @@ class GoogleGenAIClient:
             # Extract parameters
             model = request.get("model", "gemini-2.0-flash-exp")
             messages = request.get("messages", [])
+            logger.info(f"🚀 Starting streaming request for model={model}, {len(messages)} messages")
 
             # Build contents and config from messages
             contents, system_instruction = self._convert_messages_to_contents(messages)
             config = self._build_config(request, system_instruction)
+            logger.info(f"📋 Converted {len(contents)} contents, system_instruction={'present' if system_instruction else 'none'}")
 
             # Stream from Google API (blocking, so run in thread pool)
             def _generate_stream():
-                return self.client.models.generate_content_stream(
+                logger.info(f"🔌 Calling Google API generate_content_stream for {model}...")
+                result = self.client.models.generate_content_stream(
                     model=model,
                     contents=contents,
                     config=config,
                 )
+                logger.info(f"✅ Google API stream object created: {type(result)}")
+                return result
 
+            logger.info("⏳ Awaiting stream creation in thread pool...")
             stream = await asyncio.to_thread(_generate_stream)
+            logger.info(f"✅ Stream created successfully, type={type(stream)}")
 
             # Convert stream to OpenAI SSE format
+            logger.info("🔄 Starting stream-to-OpenAI conversion...")
             async for chunk in self._stream_to_openai_format(stream, model, request_id):
                 yield chunk
 
@@ -297,6 +305,7 @@ class GoogleGenAIClient:
             SSE-formatted chunks
         """
         chunk_id = f"chatcmpl-google-{int(asyncio.get_event_loop().time())}"
+        logger.info(f"🎬 Starting stream conversion for model {model}, request_id={request_id}")
 
         # Iterate through the stream and yield chunks in real-time
         # Use a queue to stream from blocking generator without waiting for all chunks
@@ -305,32 +314,49 @@ class GoogleGenAIClient:
 
         chunk_queue = queue.Queue()
         error_holder = [None]
+        chunk_count = [0]  # Track chunks for debugging
 
         def _stream_reader():
             """Read from blocking stream and put chunks in queue"""
             try:
+                logger.info("📥 Stream reader thread started, reading from Google API...")
                 for chunk in stream:
+                    chunk_count[0] += 1
+                    logger.info(f"📦 Stream reader: Got chunk #{chunk_count[0]}, queueing...")
                     chunk_queue.put(("chunk", chunk))
+                logger.info(f"✅ Stream reader: Finished reading {chunk_count[0]} chunks, sending done signal")
                 chunk_queue.put(("done", None))
             except Exception as e:
+                logger.error(f"❌ Stream reader error: {str(e)}")
+                logger.error(traceback.format_exc())
                 error_holder[0] = e
                 chunk_queue.put(("error", str(e)))
 
         # Start background thread to read stream
         reader_thread = threading.Thread(target=_stream_reader, daemon=True)
         reader_thread.start()
+        logger.info("🔄 Background reader thread started")
 
         # Yield chunks as they arrive
+        yielded_count = 0
         while True:
-            # Get next item from queue (blocks until available)
-            item_type, item_data = await asyncio.to_thread(chunk_queue.get)
+            # Get next item from queue with timeout to prevent infinite blocking
+            logger.info(f"⏳ Main loop: Waiting for item from queue (yielded {yielded_count} so far)...")
+            try:
+                item_type, item_data = await asyncio.to_thread(chunk_queue.get, timeout=60.0)
+                logger.info(f"✉️ Main loop: Got {item_type} from queue")
+            except Exception as e:
+                logger.error(f"❌ Queue.get() timeout or error: {str(e)}")
+                break
 
             if item_type == "error":
-                logger.error(f"Error in stream: {item_data}")
+                logger.error(f"❌ Error in stream: {item_data}")
                 break
             elif item_type == "done":
+                logger.info(f"🏁 Stream done, yielded {yielded_count} chunks total")
                 break
             elif item_type != "chunk":
+                logger.warning(f"⚠️ Unknown item type: {item_type}")
                 continue
 
             chunk = item_data
@@ -340,11 +366,12 @@ class GoogleGenAIClient:
                 and request_id in self.active_requests
                 and self.active_requests[request_id].is_set()
             ):
-                logger.info(f"Request {request_id} was cancelled, stopping stream")
+                logger.info(f"🛑 Request {request_id} was cancelled, stopping stream")
                 break
 
             # Extract text from chunk
             chunk_text = chunk.text if hasattr(chunk, "text") else ""
+            logger.info(f"📝 Chunk text length: {len(chunk_text)} chars")
 
             if chunk_text:
                 # Build OpenAI-format chunk
@@ -363,9 +390,13 @@ class GoogleGenAIClient:
                 }
 
                 # Yield as SSE event
+                yielded_count += 1
+                logger.info(f"⬆️ Yielding chunk #{yielded_count} to client...")
                 yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+                logger.info(f"✅ Chunk #{yielded_count} yielded successfully")
 
         # Send final chunk with finish_reason
+        logger.info("🎬 Sending final chunk with finish_reason=stop")
         final_chunk = {
             "id": chunk_id,
             "object": "chat.completion.chunk",
@@ -377,6 +408,7 @@ class GoogleGenAIClient:
         }
         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
+        logger.info(f"🏁 Stream complete. Total chunks yielded: {yielded_count}")
 
     async def cancel_request(self, request_id: str):
         """Cancel an ongoing request.
