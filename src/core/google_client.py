@@ -132,12 +132,23 @@ class GoogleGenAIClient:
             for idx, content in enumerate(contents):
                 parts_info = []
                 if hasattr(content, 'parts'):
-                    for part in content.parts:
+                    for part_idx, part in enumerate(content.parts):
                         # Check function_call/function_response FIRST (they may also have text attr)
                         if hasattr(part, 'function_call') and part.function_call:
-                            parts_info.append(f"function_call({getattr(part.function_call, 'name', 'unknown')})")
+                            fc = part.function_call
+                            fc_name = getattr(fc, 'name', 'unknown')
+                            fc_args = dict(getattr(fc, 'args', {}))
+                            parts_info.append(f"function_call({fc_name})")
+                            logger.info(f"    Part[{part_idx}] function_call: name={fc_name}, args_keys={list(fc_args.keys())}")
                         elif hasattr(part, 'function_response') and part.function_response:
-                            parts_info.append(f"function_response({getattr(part.function_response, 'name', 'unknown')})")
+                            fr = part.function_response
+                            fr_name = getattr(fr, 'name', 'unknown')
+                            fr_response = getattr(fr, 'response', None)
+                            parts_info.append(f"function_response({fr_name})")
+                            logger.info(f"    Part[{part_idx}] function_response: name={fr_name}, response_type={type(fr_response).__name__}")
+                            # Log the response structure
+                            if isinstance(fr_response, dict):
+                                logger.info(f"      response keys={list(fr_response.keys())}, result_len={len(str(fr_response.get('result', '')))}")
                         elif hasattr(part, 'text'):
                             text_val = getattr(part, 'text', None) or ''
                             parts_info.append(f"text({len(text_val)}chars)")
@@ -145,9 +156,25 @@ class GoogleGenAIClient:
                             parts_info.append(f"unknown_part({type(part).__name__})")
                 logger.info(f"  Content[{idx}]: role={getattr(content, 'role', '?')}, parts=[{', '.join(parts_info)}]")
 
+            # Debug: Log the actual config being sent
+            logger.info(f"🔧 Config details:")
+            logger.info(f"   temperature={getattr(config, 'temperature', None)}")
+            logger.info(f"   top_p={getattr(config, 'top_p', None)}")
+            logger.info(f"   max_output_tokens={getattr(config, 'max_output_tokens', None)}")
+            logger.info(f"   tools={'present' if getattr(config, 'tools', None) else 'none'}")
+            if hasattr(config, 'tools') and config.tools:
+                logger.info(f"   tools count={len(config.tools)}")
+                for tool in config.tools:
+                    if hasattr(tool, 'function_declarations'):
+                        logger.info(f"   function_declarations count={len(tool.function_declarations)}")
+            logger.info(f"   automatic_function_calling={getattr(config, 'automatic_function_calling', None)}")
+            logger.info(f"   system_instruction={'present' if getattr(config, 'system_instruction', None) else 'none'}")
+
             # Stream from Google API (blocking, so run in thread pool)
             def _generate_stream():
                 logger.info(f"🔌 Calling Google API generate_content_stream for {model}...")
+                logger.info(f"   Endpoint: aiplatform.googleapis.com (Vertex AI)")
+                logger.info(f"   Contents count: {len(contents)}")
                 result = self.client.models.generate_content_stream(
                     model=model,
                     contents=contents,
