@@ -259,6 +259,17 @@ class GoogleGenAIClient:
         # Extract text from Google response (handle both missing attribute and None value)
         text = getattr(response, "text", None) or ""
 
+        # Check for empty response and log details
+        if not text:
+            logger.warning(f"⚠️ Google API returned empty response")
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                finish_reason = getattr(candidate, "finish_reason", None)
+                safety_ratings = getattr(candidate, "safety_ratings", None)
+                logger.warning(f"⚠️ Empty response - finish_reason={finish_reason}, safety_ratings={safety_ratings}")
+            else:
+                logger.warning(f"⚠️ Empty response - no candidates in response")
+
         # Build OpenAI-format response
         return {
             "id": f"chatcmpl-google-{int(asyncio.get_event_loop().time())}",
@@ -371,7 +382,22 @@ class GoogleGenAIClient:
 
             # Extract text from chunk (handle both missing attribute and None value)
             chunk_text = getattr(chunk, "text", None) or ""
-            logger.info(f"📝 Chunk text length: {len(chunk_text)} chars (chunk.text={'None' if getattr(chunk, 'text', None) is None else 'present'})")
+
+            # Log chunk details for debugging
+            chunk_has_text = getattr(chunk, "text", None) is not None
+            logger.info(f"📝 Chunk text length: {len(chunk_text)} chars (chunk.text={'present' if chunk_has_text else 'None'})")
+
+            # Check for safety ratings or finish reasons if text is None
+            if not chunk_has_text:
+                # Log additional chunk attributes to understand why text is None
+                chunk_attrs = dir(chunk)
+                if hasattr(chunk, "candidates") and chunk.candidates:
+                    candidate = chunk.candidates[0]
+                    finish_reason = getattr(candidate, "finish_reason", None)
+                    safety_ratings = getattr(candidate, "safety_ratings", None)
+                    logger.warning(f"⚠️ Chunk with None text - finish_reason={finish_reason}, safety_ratings={safety_ratings}")
+                else:
+                    logger.warning(f"⚠️ Chunk with None text - chunk attributes: {[attr for attr in chunk_attrs if not attr.startswith('_')]}")
 
             if chunk_text:
                 # Build OpenAI-format chunk
@@ -395,20 +421,34 @@ class GoogleGenAIClient:
                 yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
                 logger.info(f"✅ Chunk #{yielded_count} yielded successfully")
 
-        # Send final chunk with finish_reason
-        logger.info("🎬 Sending final chunk with finish_reason=stop")
-        final_chunk = {
-            "id": chunk_id,
-            "object": "chat.completion.chunk",
-            "created": int(asyncio.get_event_loop().time()),
-            "model": model,
-            "choices": [
-                {"index": 0, "delta": {}, "finish_reason": "stop"}
-            ],
-        }
-        yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
-        logger.info(f"🏁 Stream complete. Total chunks yielded: {yielded_count}")
+        # Check if we yielded any content
+        if yielded_count == 0:
+            logger.error(f"❌ Stream completed with 0 chunks yielded - model may have blocked the response")
+            # Yield error event instead of normal completion
+            error_data = {
+                "error": {
+                    "type": "content_filter_error",
+                    "message": "The model did not generate any content. This may be due to safety filters or content policy restrictions."
+                }
+            }
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            logger.error(f"❌ Stream failed: No content generated")
+        else:
+            # Send final chunk with finish_reason
+            logger.info("🎬 Sending final chunk with finish_reason=stop")
+            final_chunk = {
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": int(asyncio.get_event_loop().time()),
+                "model": model,
+                "choices": [
+                    {"index": 0, "delta": {}, "finish_reason": "stop"}
+                ],
+            }
+            yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            logger.info(f"🏁 Stream complete. Total chunks yielded: {yielded_count}")
 
     async def cancel_request(self, request_id: str):
         """Cancel an ongoing request.
