@@ -37,7 +37,9 @@ class GoogleGenAIClient:
         self.timeout = timeout
 
         # Create the genai client with API key
-        self.client = genai.Client(api_key=api_key)
+        # IMPORTANT: vertexai=False ensures we use Gemini Developer API (supports API keys)
+        # instead of Vertex AI (requires OAuth2)
+        self.client = genai.Client(api_key=api_key, vertexai=False)
 
         self.active_requests: Dict[str, asyncio.Event] = {}
 
