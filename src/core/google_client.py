@@ -134,7 +134,8 @@ class GoogleGenAIClient:
                 if hasattr(content, 'parts'):
                     for part in content.parts:
                         if hasattr(part, 'text'):
-                            parts_info.append(f"text({len(getattr(part, 'text', ''))}chars)")
+                            text_val = getattr(part, 'text', None) or ''
+                            parts_info.append(f"text({len(text_val)}chars)")
                         elif hasattr(part, 'function_call'):
                             parts_info.append(f"function_call({getattr(part.function_call, 'name', 'unknown')})")
                         elif hasattr(part, 'function_response'):
@@ -188,6 +189,10 @@ class GoogleGenAIClient:
         contents = []
         system_instruction = None
 
+        # Track tool_call_id -> function_name mapping
+        # OpenAI tool results don't include function name, but Google needs it
+        tool_call_map = {}
+
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -222,6 +227,11 @@ class GoogleGenAIClient:
                         if tool_call.get("type") == "function":
                             func = tool_call.get("function", {})
                             func_name = func.get("name", "")
+                            call_id = tool_call.get("id", "")
+
+                            # Track this tool_call_id -> function_name for later tool results
+                            if call_id:
+                                tool_call_map[call_id] = func_name
 
                             # Parse arguments JSON string to dict
                             args_str = func.get("arguments", "{}")
@@ -252,11 +262,13 @@ class GoogleGenAIClient:
                 tool_call_id = msg.get("tool_call_id", "")
                 result_content = str(content) if content else ""
 
-                # Extract function name from tool_call_id or use generic name
+                # Look up function name from previous tool_call using tool_call_id
                 # OpenAI format doesn't include function name in tool response,
-                # but Google needs it. We'll need to track this from previous messages.
-                # For now, use a generic approach or extract from context
-                func_name = msg.get("name", "unknown_function")
+                # but Google needs it
+                func_name = tool_call_map.get(tool_call_id) or msg.get("name", "unknown_function")
+
+                if not tool_call_map.get(tool_call_id):
+                    logger.warning(f"⚠️ Could not find function name for tool_call_id={tool_call_id}, using '{func_name}'")
 
                 # Create FunctionResponse part
                 try:
