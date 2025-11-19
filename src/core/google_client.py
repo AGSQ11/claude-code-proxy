@@ -235,6 +235,43 @@ class GoogleGenAIClient:
 
         return contents, system_instruction
 
+    def _convert_tools_to_google_format(self, openai_tools: list) -> Optional[types.Tool]:
+        """Convert OpenAI format tools to Google GenAI format.
+
+        Args:
+            openai_tools: List of OpenAI-format tool definitions
+
+        Returns:
+            Google types.Tool object or None
+        """
+        if not openai_tools:
+            return None
+
+        function_declarations = []
+
+        for tool in openai_tools:
+            # OpenAI format: {"type": "function", "function": {...}}
+            if tool.get("type") == "function":
+                func = tool.get("function", {})
+
+                # Google format uses same schema structure for parameters
+                function_decl = {
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                }
+
+                # Parameters use same JSON Schema format
+                if "parameters" in func:
+                    function_decl["parameters"] = func["parameters"]
+
+                function_declarations.append(function_decl)
+                logger.info(f"✅ Converted tool '{func.get('name')}' to Google format")
+
+        if function_declarations:
+            return types.Tool(function_declarations=function_declarations)
+
+        return None
+
     def _build_config(self, request: Dict[str, Any], system_instruction: Optional[list]) -> Any:
         """Build GenerateContentConfig from request parameters.
 
@@ -245,14 +282,6 @@ class GoogleGenAIClient:
         Returns:
             GenerateContentConfig object
         """
-        # Log and ignore tool-related parameters that aren't supported
-        if "tools" in request:
-            logger.warning(f"⚠️ Ignoring 'tools' parameter - function calling not supported for Google API")
-        if "tool_choice" in request:
-            logger.warning(f"⚠️ Ignoring 'tool_choice' parameter - function calling not supported for Google API")
-        if "parallel_tool_calls" in request:
-            logger.warning(f"⚠️ Ignoring 'parallel_tool_calls' parameter - function calling not supported for Google API")
-
         config_params = {
             "temperature": request.get("temperature", 1.0),
             "top_p": request.get("top_p", 0.95),
@@ -264,6 +293,28 @@ class GoogleGenAIClient:
                 types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
             ],
         }
+
+        # Convert and add tools if present
+        if "tools" in request and request["tools"]:
+            google_tools = self._convert_tools_to_google_format(request["tools"])
+            if google_tools:
+                config_params["tools"] = [google_tools]
+                logger.info(f"✅ Added {len(request['tools'])} tools to config")
+
+        # Note: tool_choice and parallel_tool_calls handled differently in Google API
+        # Google uses automatic_function_calling config instead
+        if "tool_choice" in request:
+            tool_choice = request["tool_choice"]
+            if tool_choice == "none":
+                # Disable automatic function calling
+                config_params["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=True)
+                logger.info("🔧 Disabled automatic function calling (tool_choice=none)")
+            elif tool_choice == "auto":
+                # Enable automatic function calling (default behavior)
+                logger.info("🔧 Using automatic function calling (tool_choice=auto)")
+            # "required" and specific function forcing not directly supported, log warning
+            elif isinstance(tool_choice, dict):
+                logger.warning(f"⚠️ Specific tool_choice not supported, using automatic function calling")
 
         # Add system instruction if present
         if system_instruction:
